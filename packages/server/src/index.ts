@@ -67,6 +67,8 @@ wss.on("connection", (ws) => {
         playerId: result.player.id,
         players: result.room.snapshotPlayers(),
         zombies: result.room.snapshotZombies(),
+        lootNodes: result.room.snapshotLootNodes(),
+        storage: result.room.snapshotStorage(),
       });
       return;
     }
@@ -83,6 +85,8 @@ wss.on("connection", (ws) => {
         playerId: result.player.id,
         players: result.room.snapshotPlayers(),
         zombies: result.room.snapshotZombies(),
+        lootNodes: result.room.snapshotLootNodes(),
+        storage: result.room.snapshotStorage(),
       });
       return;
     }

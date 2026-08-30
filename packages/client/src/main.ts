@@ -1,17 +1,24 @@
 import {
   COMBAT,
+  LOOT,
   MILESTONE,
   PLAYER,
+  STORAGE_POS,
+  bagTotal,
   distXZ,
+  formatBag,
   getSolidAabbs,
   type GameEvent,
+  type LootNodeSnapshot,
   type PlayerSnapshot,
+  type ResourceBag,
   type ServerMessage,
   type ZombieSnapshot,
 } from "@coop/shared";
 import * as THREE from "three";
 import { FpController } from "./input/FpController";
 import { ClientSocket } from "./net/ClientSocket";
+import { LootNodeRenderer } from "./render/lootNodes";
 import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
 import { ZombieRenderer } from "./render/zombies";
@@ -31,6 +38,7 @@ const crosshairEl = document.getElementById("crosshair")!;
 const hurtFlashEl = document.getElementById("hurt-flash")!;
 const hitMarkerEl = document.getElementById("hit-marker")!;
 const promptEl = document.getElementById("prompt")!;
+const lootToastEl = document.getElementById("loot-toast")!;
 const reviveHudEl = document.getElementById("revive-hud")!;
 const reviveFillEl = document.getElementById("revive-fill")!;
 const reviveTimeEl = document.getElementById("revive-time")!;
@@ -45,6 +53,8 @@ const zombieCountEl = document.getElementById("zombie-count")!;
 const hpFillEl = document.getElementById("hp-fill")!;
 const hpTextEl = document.getElementById("hp-text")!;
 const ammoEl = document.getElementById("ammo")!;
+const carryEl = document.getElementById("carry")!;
+const storageEl = document.getElementById("storage")!;
 const hintEl = document.getElementById("hint")!;
 
 milestoneEl.textContent = MILESTONE;
@@ -80,7 +90,7 @@ type Session = {
 
 let session: Session | null = null;
 let game: ReturnType<typeof startGame> | null = null;
-let lastKnownHp = PLAYER.maxHp;
+let lastKnownHp: number = PLAYER.maxHp;
 
 function setLobbyError(message: string | null): void {
   lobbyStatusEl.textContent = message ?? "";
@@ -113,11 +123,31 @@ function flashHitMarker(): void {
   window.setTimeout(() => hitMarkerEl.classList.remove("on"), 120);
 }
 
+function flashLootToast(text: string): void {
+  lootToastEl.textContent = text;
+  lootToastEl.classList.add("on");
+  window.setTimeout(() => lootToastEl.classList.remove("on"), 2200);
+}
+
+function formatBagHud(bag: ResourceBag, weightLabel?: string): string {
+  const body = formatBag(bag);
+  return weightLabel ? `${body}\n${weightLabel}` : body;
+}
+
 function handleEvents(events: GameEvent[] | undefined, you: string): void {
   if (!events) return;
   for (const ev of events) {
     if ((ev.kind === "shot" || ev.kind === "melee") && ev.playerId === you && ev.hit) {
       flashHitMarker();
+    }
+    if (ev.kind === "loot" && ev.playerId === you) {
+      flashLootToast(`Looted: ${formatBag(ev.got)}`);
+    }
+    if (ev.kind === "deposit" && ev.playerId === you) {
+      flashLootToast(`Deposited: ${formatBag(ev.moved)}`);
+    }
+    if (ev.kind === "withdraw" && ev.playerId === you) {
+      flashLootToast(`Withdrew: ${formatBag(ev.moved)}`);
     }
   }
 }
@@ -148,7 +178,7 @@ const socket = new ClientSocket({
         code: msg.code,
         name,
       };
-      enterWorld(msg.players, msg.zombies);
+      enterWorld(msg.players, msg.zombies, msg.lootNodes, msg.storage);
       return;
     }
     if (msg.type === "snapshot" && game) {
@@ -181,7 +211,12 @@ codeInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnJoin.click();
 });
 
-function enterWorld(players: PlayerSnapshot[], zombies: ZombieSnapshot[]): void {
+function enterWorld(
+  players: PlayerSnapshot[],
+  zombies: ZombieSnapshot[],
+  lootNodes: LootNodeSnapshot[],
+  storage: ResourceBag,
+): void {
   if (!session) return;
   lobbyEl.classList.add("hidden");
   hudEl.classList.add("visible");
@@ -195,9 +230,14 @@ function enterWorld(players: PlayerSnapshot[], zombies: ZombieSnapshot[]): void 
   lastKnownHp = me?.hp ?? PLAYER.maxHp;
   updateHpHud(me?.hp ?? PLAYER.maxHp, me?.maxHp ?? PLAYER.maxHp);
   ammoEl.textContent = String(me?.ammo ?? 0);
+  carryEl.textContent = formatBagHud(
+    me?.inventory ?? { food: 0, scrap: 0, wood: 0, ammo: 0, medkit: 0 },
+    `${(me?.carryWeight ?? 0).toFixed(0)} / ${LOOT.carryMaxWeight}`,
+  );
+  storageEl.textContent = formatBagHud(storage);
 
   if (game) game.dispose();
-  game = startGame(session, players, zombies, {
+  game = startGame(session, players, zombies, lootNodes, storage, {
     sendInput: (packet) => socket.send({ type: "input", ...packet }),
     sendDev: (line) => socket.send({ type: "devCommand", line }),
   });
@@ -207,6 +247,8 @@ function startGame(
   active: Session,
   initialPlayers: PlayerSnapshot[],
   initialZombies: ZombieSnapshot[],
+  initialLoot: LootNodeSnapshot[],
+  initialStorage: ResourceBag,
   net: {
     sendInput: (packet: {
       seq: number;
@@ -218,6 +260,7 @@ function startGame(
       melee: boolean;
       interact: boolean;
       jump: boolean;
+      withdraw: boolean;
     }) => void;
     sendDev: (line: string) => void;
   },
@@ -244,6 +287,8 @@ function startGame(
   buildPlaceholderWorld(scene);
   const remotes = new RemotePlayers(scene);
   const zombies = new ZombieRenderer(scene);
+  const lootVisuals = new LootNodeRenderer(scene);
+  lootVisuals.sync(initialLoot);
 
   const fp = new FpController(renderer.domElement, {
     x: me?.x ?? 0,
@@ -276,11 +321,20 @@ function startGame(
   let inputAcc = 0;
   let alive = true;
   let latestPlayers: PlayerSnapshot[] = initialPlayers;
+  let latestLoot: LootNodeSnapshot[] = initialLoot;
+  let latestStorage: ResourceBag = initialStorage;
+
+  function updateBagHud(self: PlayerSnapshot): void {
+    carryEl.textContent = formatBagHud(
+      self.inventory,
+      `${self.carryWeight.toFixed(0)} / ${LOOT.carryMaxWeight}`,
+    );
+    storageEl.textContent = formatBagHud(latestStorage);
+  }
 
   function updateReviveHud(self: PlayerSnapshot): void {
     const progress = self.reviveProgress;
     const being = self.beingRevived;
-    // Find progress if we're the downed one being revived
     let shown = progress;
     let label = "Reviving";
     if (being && progress <= 0) {
@@ -292,8 +346,19 @@ function startGame(
       label = target ? `Reviving ${target.name}` : "Reviving";
     }
 
+    if (self.lootProgress > 0 && progress <= 0) {
+      reviveHudEl.classList.add("visible");
+      reviveHudEl.querySelector(".label")!.textContent = "Working";
+      reviveFillEl.style.width = `${Math.round(self.lootProgress * 100)}%`;
+      reviveTimeEl.textContent = `${Math.round(self.lootProgress * 100)}%`;
+      return;
+    }
+
     if (shown > 0 || (being && shown >= 0 && latestPlayers.some((p) => p.reviveProgress > 0))) {
-      const p = Math.max(shown, being ? latestPlayers.find((x) => x.reviveProgress > 0)?.reviveProgress ?? 0 : 0);
+      const p = Math.max(
+        shown,
+        being ? (latestPlayers.find((x) => x.reviveProgress > 0)?.reviveProgress ?? 0) : 0,
+      );
       if (p > 0) {
         reviveHudEl.classList.add("visible");
         reviveHudEl.querySelector(".label")!.textContent = label;
@@ -309,6 +374,7 @@ function startGame(
   function updatePrompts(self: PlayerSnapshot): void {
     fp.setDowned(self.downed);
     updateReviveHud(self);
+    updateBagHud(self);
 
     if (self.downed) {
       downedBannerEl.classList.add("visible");
@@ -321,7 +387,7 @@ function startGame(
     downedBannerEl.classList.remove("visible");
 
     let nearestDown: PlayerSnapshot | null = null;
-    let best = COMBAT.reviveRange;
+    let best: number = COMBAT.reviveRange;
     for (const p of latestPlayers) {
       if (p.id === active.playerId || !p.downed) continue;
       const d = distXZ(fp.state.x, fp.state.z, p.x, p.z);
@@ -331,19 +397,56 @@ function startGame(
       }
     }
 
-    if (nearestDown && self.reviveProgress <= 0) {
+    if (nearestDown) {
       promptEl.classList.add("visible");
-      promptEl.textContent = `Hold E to revive ${nearestDown.name} (${COMBAT.reviveDuration}s)`;
-    } else if (!nearestDown) {
-      promptEl.classList.remove("visible");
-    } else {
-      promptEl.classList.remove("visible");
+      promptEl.textContent =
+        self.reviveProgress > 0
+          ? `Reviving ${nearestDown.name}…`
+          : `Hold E to revive ${nearestDown.name} (${COMBAT.reviveDuration}s)`;
+      return;
     }
+
+    let nearestLoot: LootNodeSnapshot | null = null;
+    let lootDist: number = LOOT.interactRange;
+    for (const node of latestLoot) {
+      if (node.searched) continue;
+      const d = distXZ(fp.state.x, fp.state.z, node.x, node.z);
+      if (d < lootDist) {
+        lootDist = d;
+        nearestLoot = node;
+      }
+    }
+
+    const nearStorage =
+      distXZ(fp.state.x, fp.state.z, STORAGE_POS.x, STORAGE_POS.z) <= LOOT.storageRange;
+
+    if (nearestLoot) {
+      promptEl.classList.add("visible");
+      promptEl.textContent = `Hold E to search ${nearestLoot.label}`;
+      return;
+    }
+
+    if (nearStorage) {
+      const canDeposit = bagTotal(self.inventory) > 0;
+      const canWithdraw = bagTotal(latestStorage) > 0;
+      if (canDeposit || canWithdraw) {
+        promptEl.classList.add("visible");
+        const parts: string[] = [];
+        if (canDeposit) parts.push("Hold E deposit");
+        if (canWithdraw) parts.push("Hold R withdraw");
+        promptEl.textContent = parts.join(" · ");
+        return;
+      }
+    }
+
+    promptEl.classList.remove("visible");
   }
 
   function onSnapshot(msg: Extract<ServerMessage, { type: "snapshot" }>): void {
     if (msg.you !== active.playerId) return;
     latestPlayers = msg.players;
+    latestLoot = msg.lootNodes;
+    latestStorage = msg.storage;
     playerCountEl.textContent = String(msg.players.length);
     zombieCountEl.textContent = String(msg.zombies.length);
     const self = msg.players.find((p) => p.id === active.playerId);
@@ -355,6 +458,7 @@ function startGame(
     }
     remotes.sync(msg.players, active.playerId);
     zombies.sync(msg.zombies);
+    lootVisuals.sync(msg.lootNodes);
     handleEvents(msg.events, active.playerId);
   }
 
@@ -388,7 +492,7 @@ function startGame(
     hintEl.textContent = consoleUi.isOpen()
       ? "Dev console open — ` to close"
       : fp.isLocked
-        ? "LMB shoot · F melee · Space jump · E revive · ` console"
+        ? "LMB shoot · F melee · Space jump · E search/deposit/revive · R withdraw · ` console"
         : "Click the game to capture mouse";
 
     renderer.render(scene, camera);
@@ -412,6 +516,7 @@ function startGame(
       promptEl.classList.remove("visible");
       reviveHudEl.classList.remove("visible");
       downedBannerEl.classList.remove("visible");
+      lootToastEl.classList.remove("on");
     },
   };
 }

@@ -1,7 +1,5 @@
-import type { Aabb } from "./math.js";
+import type { Aabb, Vec3 } from "./math.js";
 import { PLAYER } from "./constants.js";
-
-export type Vec3 = { x: number; y: number; z: number };
 
 export function lookDirection(yaw: number, pitch: number): Vec3 {
   const cp = Math.cos(pitch);

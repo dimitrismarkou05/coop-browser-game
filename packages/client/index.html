@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Co-op Zombie — M5</title>
+    <title>Co-op Zombie — M6</title>
     <style>
       * {
         box-sizing: border-box;
@@ -371,6 +371,30 @@
       #downed-banner.visible {
         display: block;
       }
+      #loot-toast {
+        position: fixed;
+        left: 50%;
+        top: 12%;
+        transform: translateX(-50%);
+        z-index: 13;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: rgba(13, 17, 23, 0.9);
+        border: 1px solid #3d9a5f;
+        font-size: 14px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+      }
+      #loot-toast.on {
+        opacity: 1;
+      }
+      #carry,
+      #storage {
+        font-size: 13px;
+        max-width: 220px;
+        white-space: pre-wrap;
+      }
       canvas {
         display: block;
       }
@@ -380,7 +404,7 @@
     <div id="lobby">
       <div class="panel">
         <h1>Co-op Zombie</h1>
-        <p>M5+ — quarantine pen, jump, revive timer, dev console (`).</p>
+        <p>M6 — loot spots, carry weight, shared base storage (E deposit / R withdraw).</p>
         <label for="name">Display name</label>
         <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" list="name-history" />
         <datalist id="name-history"></datalist>
@@ -415,11 +439,16 @@
       </div>
       <div class="label" style="margin-top: 8px">Ammo</div>
       <div id="ammo">—</div>
+      <div class="label" style="margin-top: 8px">Carry</div>
+      <div id="carry">—</div>
+      <div class="label" style="margin-top: 8px">Base storage</div>
+      <div id="storage">—</div>
       <div class="label" style="margin-top: 8px">Zombies</div>
       <div id="zombie-count">—</div>
       <div class="label" style="margin-top: 8px">Controls</div>
       <div id="hint">Click the game to capture mouse</div>
     </div>
+    <div id="loot-toast"></div>
     <div id="prompt"></div>
     <div id="revive-hud">
       <div class="label">Reviving</div>

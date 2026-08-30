@@ -87,6 +87,10 @@ export class FpController {
     return !this.blocked && this.keys.has("KeyE");
   }
 
+  isWithdrawHeld(): boolean {
+    return !this.blocked && !this.downed && this.keys.has("KeyR");
+  }
+
   nextInputPacket(): {
     seq: number;
     forward: number;
@@ -97,6 +101,7 @@ export class FpController {
     melee: boolean;
     interact: boolean;
     jump: boolean;
+    withdraw: boolean;
   } {
     const axes = this.getAxes();
     const shoot = this.shootEdge;
@@ -116,6 +121,7 @@ export class FpController {
       melee,
       interact: this.isInteractHeld(),
       jump,
+      withdraw: this.isWithdrawHeld(),
     };
   }
 
@@ -181,6 +187,7 @@ export class FpController {
         "ArrowRight",
         "KeyE",
         "KeyF",
+        "KeyR",
         "Space",
       ].includes(e.code)
     ) {

@@ -2,20 +2,25 @@ import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   COMBAT,
+  LOOT,
+  LOOT_SPOTS,
   M4_AMBIENT,
   MAX_PLAYERS_PER_ROOM,
   PLAYER,
   PLAYER_COLORS,
   SPAWN_OFFSETS,
   SPAWN_POSITION,
+  STORAGE_POS,
   TICK_MS,
   WEAPONS,
   ZOMBIE_DEFS,
   applyPlayerMovement,
   applyVerticalMovement,
+  bagWeight,
   clampPitch,
   clampToZombiePen,
   distXZ,
+  emptyBag,
   eyePosition,
   firstWallHit,
   getSolidAabbs,
@@ -24,8 +29,14 @@ import {
   moveToward,
   randomPointInZombiePen,
   raycastCapsuleXZ,
+  rollLootTable,
+  transferAll,
+  transferFill,
+  RESOURCE_IDS,
   type GameEvent,
+  type LootNodeSnapshot,
   type PlayerSnapshot,
+  type ResourceBag,
   type ServerMessage,
   type ZombieSnapshot,
   type ZombieTypeId,
@@ -47,6 +58,7 @@ export type RoomPlayer = {
   hp: number;
   maxHp: number;
   ammo: number;
+  inventory: ResourceBag;
   downed: boolean;
   bleedout: number;
   iFrames: number;
@@ -55,8 +67,12 @@ export type RoomPlayer = {
   meleeQueued: boolean;
   jumpQueued: boolean;
   interactHeld: boolean;
+  withdrawHeld: boolean;
   reviveTargetId: string | null;
   reviveProgress: number;
+  lootTargetId: string | null;
+  lootProgress: number;
+  lootAction: "search" | "deposit" | "withdraw" | null;
   ws: WebSocket;
 };
 
@@ -71,6 +87,15 @@ export type RoomZombie = {
   attackCd: number;
   /** If false, free-roam (dev spawns). Ambient pen zombies stay clamped. */
   penned: boolean;
+};
+
+type RoomLootNode = {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  searched: boolean;
+  table: (typeof LOOT_SPOTS)[number]["table"];
 };
 
 function send(ws: WebSocket, message: ServerMessage): void {
@@ -96,6 +121,8 @@ export class Room {
   readonly code: string;
   readonly players = new Map<string, RoomPlayer>();
   readonly zombies = new Map<string, RoomZombie>();
+  readonly lootNodes = new Map<string, RoomLootNode>();
+  storage: ResourceBag = emptyBag();
   private tick = 0;
   private respawnAcc = 0;
   private readonly solids = getSolidAabbs();
@@ -105,6 +132,7 @@ export class Room {
 
   constructor(code?: string) {
     this.code = code ?? makeCode();
+    this.seedLootNodes();
     this.seedAmbientWalkers(M4_AMBIENT.count);
     this.timer = setInterval(() => this.step(), TICK_MS);
   }
@@ -139,6 +167,7 @@ export class Room {
       hp: PLAYER.maxHp,
       maxHp: PLAYER.maxHp,
       ammo: COMBAT.startingAmmo,
+      inventory: emptyBag(),
       downed: false,
       bleedout: 0,
       iFrames: PLAYER.respawnIFrames,
@@ -147,8 +176,12 @@ export class Room {
       meleeQueued: false,
       jumpQueued: false,
       interactHeld: false,
+      withdrawHeld: false,
       reviveTargetId: null,
       reviveProgress: 0,
+      lootTargetId: null,
+      lootProgress: 0,
+      lootAction: null,
       ws,
     };
     this.players.set(id, player);
@@ -175,6 +208,7 @@ export class Room {
       melee?: boolean;
       interact?: boolean;
       jump?: boolean;
+      withdraw?: boolean;
     },
   ): void {
     const player = this.players.get(playerId);
@@ -187,6 +221,7 @@ export class Room {
     if (input.melee) player.meleeQueued = true;
     if (input.jump) player.jumpQueued = true;
     player.interactHeld = Boolean(input.interact);
+    player.withdrawHeld = Boolean(input.withdraw);
   }
 
   handleDevCommand(playerId: string, line: string): { ok: boolean; message: string } {
@@ -295,10 +330,13 @@ export class Room {
       hp: p.hp,
       maxHp: p.maxHp,
       ammo: p.ammo,
+      inventory: { ...p.inventory },
+      carryWeight: bagWeight(p.inventory),
       downed: p.downed,
       bleedout: p.bleedout,
       reviveProgress: Math.min(1, p.reviveProgress / COMBAT.reviveDuration),
       beingRevived: beingRevived.has(p.id),
+      lootProgress: p.lootProgress,
     }));
   }
 
@@ -314,6 +352,20 @@ export class Room {
     }));
   }
 
+  snapshotLootNodes(): LootNodeSnapshot[] {
+    return [...this.lootNodes.values()].map((n) => ({
+      id: n.id,
+      label: n.label,
+      x: n.x,
+      z: n.z,
+      searched: n.searched,
+    }));
+  }
+
+  snapshotStorage(): ResourceBag {
+    return { ...this.storage };
+  }
+
   broadcast(message: ServerMessage, exceptId?: string): void {
     for (const player of this.players.values()) {
       if (player.id === exceptId) continue;
@@ -323,6 +375,19 @@ export class Room {
 
   dispose(): void {
     clearInterval(this.timer);
+  }
+
+  private seedLootNodes(): void {
+    for (const spot of LOOT_SPOTS) {
+      this.lootNodes.set(spot.id, {
+        id: spot.id,
+        label: spot.label,
+        x: spot.x,
+        z: spot.z,
+        searched: false,
+        table: spot.table,
+      });
+    }
   }
 
   private seedAmbientWalkers(count: number): void {
@@ -399,6 +464,9 @@ export class Room {
     player.jumpQueued = false;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
+    player.lootProgress = 0;
+    player.lootTargetId = null;
+    player.lootAction = null;
     this.tickEvents.push({ kind: "down", playerId: player.id });
   }
 
@@ -418,6 +486,87 @@ export class Room {
     player.strafe = 0;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
+    this.clearLootInteract(player);
+  }
+
+  private clearLootInteract(player: RoomPlayer): void {
+    player.lootProgress = 0;
+    player.lootTargetId = null;
+    player.lootAction = null;
+  }
+
+  private nearStorage(player: RoomPlayer): boolean {
+    return distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) <= LOOT.storageRange;
+  }
+
+  private nearestLootNode(player: RoomPlayer): RoomLootNode | null {
+    let best: RoomLootNode | null = null;
+    let bestDist: number = LOOT.interactRange;
+    for (const node of this.lootNodes.values()) {
+      if (node.searched) continue;
+      const d = distXZ(player.x, player.z, node.x, node.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = node;
+      }
+    }
+    return best;
+  }
+
+  private applyAmmoDelta(player: RoomPlayer, delta: number): void {
+    if (!delta) return;
+    player.ammo = Math.max(0, player.ammo + delta);
+  }
+
+  private finishSearch(player: RoomPlayer, node: RoomLootNode): void {
+    node.searched = true;
+    const rolled = rollLootTable(node.table);
+    const result = transferFill(rolled, player.inventory);
+    player.inventory = result.to;
+    this.applyAmmoDelta(player, result.moved.ammo);
+    this.tickEvents.push({
+      kind: "loot",
+      playerId: player.id,
+      spotId: node.id,
+      got: result.moved,
+    });
+    this.clearLootInteract(player);
+  }
+
+  private finishDeposit(player: RoomPlayer): void {
+    const before = { ...player.inventory };
+    const result = transferAll(player.inventory, this.storage);
+    player.inventory = result.from;
+    this.storage = result.to;
+    this.applyAmmoDelta(player, -before.ammo);
+    this.tickEvents.push({
+      kind: "deposit",
+      playerId: player.id,
+      moved: before,
+    });
+    this.clearLootInteract(player);
+  }
+
+  private finishWithdraw(player: RoomPlayer): void {
+    // Pull up to withdrawChunk of each stocked resource into carry.
+    const staged = emptyBag();
+    for (const id of RESOURCE_IDS) {
+      const take = Math.min(LOOT.withdrawChunk, this.storage[id]);
+      staged[id] = take;
+      this.storage[id] -= take;
+    }
+    const result = transferFill(staged, player.inventory);
+    for (const id of RESOURCE_IDS) {
+      this.storage[id] += result.from[id];
+    }
+    player.inventory = result.to;
+    this.applyAmmoDelta(player, result.moved.ammo);
+    this.tickEvents.push({
+      kind: "withdraw",
+      playerId: player.id,
+      moved: result.moved,
+    });
+    this.clearLootInteract(player);
   }
 
   private damageZombie(zombie: RoomZombie, amount: number, by: string): boolean {
@@ -513,45 +662,85 @@ export class Room {
     }
   }
 
-  private updateRevive(player: RoomPlayer, dt: number): void {
-    if (player.downed || !player.interactHeld) {
+  private updateInteract(player: RoomPlayer, dt: number): void {
+    if (player.downed) {
       player.reviveProgress = 0;
       player.reviveTargetId = null;
+      this.clearLootInteract(player);
       return;
     }
 
-    let target: RoomPlayer | null = null;
-    let best = COMBAT.reviveRange;
+    // Priority: revive > loot search > deposit. Withdraw is KeyR (separate hold).
+    let reviveTarget: RoomPlayer | null = null;
+    let bestRevive: number = COMBAT.reviveRange;
     for (const other of this.players.values()) {
       if (other.id === player.id || !other.downed) continue;
       const d = distXZ(player.x, player.z, other.x, other.z);
-      if (d < best) {
-        best = d;
-        target = other;
+      if (d < bestRevive) {
+        bestRevive = d;
+        reviveTarget = other;
       }
     }
 
-    if (!target) {
-      player.reviveProgress = 0;
-      player.reviveTargetId = null;
+    if (player.interactHeld && reviveTarget) {
+      this.clearLootInteract(player);
+      if (player.reviveTargetId !== reviveTarget.id) {
+        player.reviveTargetId = reviveTarget.id;
+        player.reviveProgress = 0;
+      }
+      player.reviveProgress += dt;
+      if (player.reviveProgress >= COMBAT.reviveDuration) {
+        reviveTarget.downed = false;
+        reviveTarget.bleedout = 0;
+        reviveTarget.hp = Math.round(reviveTarget.maxHp * COMBAT.reviveHpFraction);
+        reviveTarget.iFrames = PLAYER.hurtIFrames;
+        this.tickEvents.push({ kind: "revive", playerId: reviveTarget.id, by: player.id });
+        player.reviveProgress = 0;
+        player.reviveTargetId = null;
+      }
       return;
     }
 
-    if (player.reviveTargetId !== target.id) {
-      player.reviveTargetId = target.id;
-      player.reviveProgress = 0;
+    player.reviveProgress = 0;
+    player.reviveTargetId = null;
+
+    if (player.withdrawHeld && this.nearStorage(player) && bagWeight(this.storage) > 0) {
+      if (player.lootAction !== "withdraw") {
+        player.lootAction = "withdraw";
+        player.lootTargetId = "storage";
+        player.lootProgress = 0;
+      }
+      player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.withdrawDuration);
+      if (player.lootProgress >= 1) this.finishWithdraw(player);
+      return;
     }
 
-    player.reviveProgress += dt;
-    if (player.reviveProgress >= COMBAT.reviveDuration) {
-      target.downed = false;
-      target.bleedout = 0;
-      target.hp = Math.round(target.maxHp * COMBAT.reviveHpFraction);
-      target.iFrames = PLAYER.hurtIFrames;
-      this.tickEvents.push({ kind: "revive", playerId: target.id, by: player.id });
-      player.reviveProgress = 0;
-      player.reviveTargetId = null;
+    if (player.interactHeld) {
+      const lootNode = this.nearestLootNode(player);
+      if (lootNode) {
+        if (player.lootAction !== "search" || player.lootTargetId !== lootNode.id) {
+          player.lootAction = "search";
+          player.lootTargetId = lootNode.id;
+          player.lootProgress = 0;
+        }
+        player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.searchDuration);
+        if (player.lootProgress >= 1) this.finishSearch(player, lootNode);
+        return;
+      }
+
+      if (this.nearStorage(player) && bagWeight(player.inventory) > 0) {
+        if (player.lootAction !== "deposit") {
+          player.lootAction = "deposit";
+          player.lootTargetId = "storage";
+          player.lootProgress = 0;
+        }
+        player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.depositDuration);
+        if (player.lootProgress >= 1) this.finishDeposit(player);
+        return;
+      }
     }
+
+    this.clearLootInteract(player);
   }
 
   private isActivelyBeingRevived(targetId: string): boolean {
@@ -616,7 +805,7 @@ export class Room {
         this.tryMelee(player);
       }
 
-      this.updateRevive(player, dt);
+      this.updateInteract(player, dt);
     }
 
     // Pass 2: bleedout (paused while an ally is actively reviving).
@@ -679,6 +868,8 @@ export class Room {
 
     const players = this.snapshotPlayers();
     const zombies = this.snapshotZombies();
+    const lootNodes = this.snapshotLootNodes();
+    const storage = this.snapshotStorage();
     const events = this.tickEvents.length ? this.tickEvents : undefined;
     for (const player of this.players.values()) {
       send(player.ws, {
@@ -687,6 +878,8 @@ export class Room {
         you: player.id,
         players,
         zombies,
+        lootNodes,
+        storage,
         events,
       });
     }
@@ -744,6 +937,7 @@ export class RoomManager {
       melee?: boolean;
       interact?: boolean;
       jump?: boolean;
+      withdraw?: boolean;
     },
   ): void {
     const binding = this.bySocket.get(ws);

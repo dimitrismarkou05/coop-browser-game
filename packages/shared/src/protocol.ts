@@ -1,5 +1,6 @@
 /** Shared client ↔ server message types. */
 
+import type { ResourceBag } from "./balance/loot.js";
 import type { ZombieTypeId } from "./balance/zombies.js";
 
 export type PlayerSnapshot = {
@@ -14,12 +15,16 @@ export type PlayerSnapshot = {
   hp: number;
   maxHp: number;
   ammo: number;
+  inventory: ResourceBag;
+  carryWeight: number;
   downed: boolean;
   bleedout: number;
   /** 0–1 progress while this player is performing a revive. */
   reviveProgress: number;
   /** True if someone is currently reviving this (downed) player. */
   beingRevived: boolean;
+  /** 0–1 search / storage interact progress. */
+  lootProgress: number;
 };
 
 export type ZombieSnapshot = {
@@ -32,12 +37,23 @@ export type ZombieSnapshot = {
   hp: number;
 };
 
+export type LootNodeSnapshot = {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  searched: boolean;
+};
+
 export type GameEvent =
   | { kind: "shot"; playerId: string; hit: boolean }
   | { kind: "melee"; playerId: string; hit: boolean }
   | { kind: "kill"; zombieId: string; by: string }
   | { kind: "down"; playerId: string }
   | { kind: "revive"; playerId: string; by: string }
+  | { kind: "loot"; playerId: string; spotId: string; got: ResourceBag }
+  | { kind: "deposit"; playerId: string; moved: ResourceBag }
+  | { kind: "withdraw"; playerId: string; moved: ResourceBag }
   | { kind: "dev"; message: string };
 
 export type ClientMessage =
@@ -55,6 +71,7 @@ export type ClientMessage =
       melee?: boolean;
       interact?: boolean;
       jump?: boolean;
+      withdraw?: boolean;
     }
   | { type: "devCommand"; line: string };
 
@@ -68,6 +85,8 @@ export type ServerMessage =
       playerId: string;
       players: PlayerSnapshot[];
       zombies: ZombieSnapshot[];
+      lootNodes: LootNodeSnapshot[];
+      storage: ResourceBag;
     }
   | {
       type: "snapshot";
@@ -75,6 +94,8 @@ export type ServerMessage =
       you: string;
       players: PlayerSnapshot[];
       zombies: ZombieSnapshot[];
+      lootNodes: LootNodeSnapshot[];
+      storage: ResourceBag;
       events?: GameEvent[];
     }
   | { type: "playerLeft"; playerId: string }
@@ -122,6 +143,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           melee: Boolean(raw.melee),
           interact: Boolean(raw.interact),
           jump: Boolean(raw.jump),
+          withdraw: Boolean(raw.withdraw),
         };
       }
       return null;
