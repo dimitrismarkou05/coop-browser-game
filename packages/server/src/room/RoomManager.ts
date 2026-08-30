@@ -1,20 +1,30 @@
 import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
+  COMBAT,
   M4_AMBIENT,
-  MAP,
   MAX_PLAYERS_PER_ROOM,
   PLAYER,
   PLAYER_COLORS,
   SPAWN_OFFSETS,
   SPAWN_POSITION,
   TICK_MS,
+  WEAPONS,
   ZOMBIE_DEFS,
   applyPlayerMovement,
+  applyVerticalMovement,
   clampPitch,
+  clampToZombiePen,
   distXZ,
+  eyePosition,
+  firstWallHit,
   getSolidAabbs,
+  inMeleeCone,
+  lookDirection,
   moveToward,
+  randomPointInZombiePen,
+  raycastCapsuleXZ,
+  type GameEvent,
   type PlayerSnapshot,
   type ServerMessage,
   type ZombieSnapshot,
@@ -28,13 +38,25 @@ export type RoomPlayer = {
   x: number;
   y: number;
   z: number;
+  vy: number;
+  grounded: boolean;
   yaw: number;
   pitch: number;
   forward: number;
   strafe: number;
   hp: number;
   maxHp: number;
+  ammo: number;
+  downed: boolean;
+  bleedout: number;
   iFrames: number;
+  weaponCd: number;
+  shootQueued: boolean;
+  meleeQueued: boolean;
+  jumpQueued: boolean;
+  interactHeld: boolean;
+  reviveTargetId: string | null;
+  reviveProgress: number;
   ws: WebSocket;
 };
 
@@ -47,6 +69,8 @@ export type RoomZombie = {
   yaw: number;
   hp: number;
   attackCd: number;
+  /** If false, free-roam (dev spawns). Ambient pen zombies stay clamped. */
+  penned: boolean;
 };
 
 function send(ws: WebSocket, message: ServerMessage): void {
@@ -68,22 +92,6 @@ function makeCode(): string {
 let nextPlayerSeq = 1;
 let nextZombieSeq = 1;
 
-function edgeSpawn(): { x: number; z: number } {
-  const half = MAP.halfExtent - 4;
-  const side = Math.floor(Math.random() * 4);
-  if (side === 0) return { x: -half + Math.random() * half * 2, z: -half };
-  if (side === 1) return { x: -half + Math.random() * half * 2, z: half };
-  if (side === 2) return { x: -half, z: -half + Math.random() * half * 2 };
-  return { x: half, z: -half + Math.random() * half * 2 };
-}
-
-/** Near buildings so M4 players meet walkers without a long trek. */
-function nearTownSpawn(): { x: number; z: number } {
-  const angle = Math.random() * Math.PI * 2;
-  const dist = 12 + Math.random() * 10;
-  return { x: Math.cos(angle) * dist, z: Math.sin(angle) * dist };
-}
-
 export class Room {
   readonly code: string;
   readonly players = new Map<string, RoomPlayer>();
@@ -93,6 +101,7 @@ export class Room {
   private readonly solids = getSolidAabbs();
   private readonly timer: ReturnType<typeof setInterval>;
   private onEmpty: ((code: string) => void) | null = null;
+  private tickEvents: GameEvent[] = [];
 
   constructor(code?: string) {
     this.code = code ?? makeCode();
@@ -121,13 +130,25 @@ export class Room {
       x: SPAWN_POSITION.x + offset.x,
       y: 0,
       z: SPAWN_POSITION.z + offset.z,
+      vy: 0,
+      grounded: true,
       yaw: 0,
       pitch: 0,
       forward: 0,
       strafe: 0,
       hp: PLAYER.maxHp,
       maxHp: PLAYER.maxHp,
+      ammo: COMBAT.startingAmmo,
+      downed: false,
+      bleedout: 0,
       iFrames: PLAYER.respawnIFrames,
+      weaponCd: 0,
+      shootQueued: false,
+      meleeQueued: false,
+      jumpQueued: false,
+      interactHeld: false,
+      reviveTargetId: null,
+      reviveProgress: 0,
       ws,
     };
     this.players.set(id, player);
@@ -145,7 +166,16 @@ export class Room {
 
   setInput(
     playerId: string,
-    input: { forward: number; strafe: number; yaw: number; pitch: number },
+    input: {
+      forward: number;
+      strafe: number;
+      yaw: number;
+      pitch: number;
+      shoot?: boolean;
+      melee?: boolean;
+      interact?: boolean;
+      jump?: boolean;
+    },
   ): void {
     const player = this.players.get(playerId);
     if (!player) return;
@@ -153,9 +183,106 @@ export class Room {
     player.strafe = Math.max(-1, Math.min(1, input.strafe));
     player.yaw = input.yaw;
     player.pitch = clampPitch(input.pitch);
+    if (input.shoot) player.shootQueued = true;
+    if (input.melee) player.meleeQueued = true;
+    if (input.jump) player.jumpQueued = true;
+    player.interactHeld = Boolean(input.interact);
+  }
+
+  handleDevCommand(playerId: string, line: string): { ok: boolean; message: string } {
+    const player = this.players.get(playerId);
+    if (!player) return { ok: false, message: "Not in room" };
+
+    const raw = line.trim().replace(/^\//, "");
+    if (!raw) return { ok: false, message: "Empty command" };
+    const parts = raw.split(/\s+/);
+    const cmd = parts[0]?.toLowerCase() ?? "";
+
+    if (cmd === "spawn" && parts[1]?.toLowerCase() === "zombie") {
+      const kindRaw = (parts[2] ?? "walker").toLowerCase();
+      const kind: ZombieTypeId =
+        kindRaw === "runner" || kindRaw === "bruiser" || kindRaw === "walker"
+          ? kindRaw
+          : "walker";
+      const origin = eyePosition(player.x, player.y, player.z);
+      const dir = lookDirection(player.yaw, player.pitch);
+      const wallT = firstWallHit(origin, dir, 40, this.solids);
+      const dist = wallT !== null ? Math.max(1.5, wallT - 0.6) : 6;
+      const x = origin.x + dir.x * dist;
+      const z = origin.z + dir.z * dist;
+      this.spawnZombieAt(kind, x, z, false);
+      return { ok: true, message: `Spawned ${kind} at look point (~${dist.toFixed(1)}m)` };
+    }
+
+    if (cmd === "kill" && parts[1]?.toLowerCase() === "player" && parts[2]) {
+      const name = parts.slice(2).join(" ");
+      const target = [...this.players.values()].find(
+        (p) => p.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (!target) return { ok: false, message: `No player named "${name}"` };
+      if (target.downed) return { ok: false, message: `${target.name} already downed` };
+      this.downPlayer(target);
+      return { ok: true, message: `Downed ${target.name}` };
+    }
+
+    if (
+      (cmd === "kill" && parts[1]?.toLowerCase() === "players") ||
+      (cmd === "kill" && parts[1]?.toLowerCase() === "all" && parts[2]?.toLowerCase() === "players")
+    ) {
+      let n = 0;
+      for (const p of this.players.values()) {
+        if (p.id === playerId || p.downed) continue;
+        this.downPlayer(p);
+        n += 1;
+      }
+      return { ok: true, message: `Downed ${n} other player(s)` };
+    }
+
+    if (cmd === "kill" && parts[1]?.toLowerCase() === "zombies") {
+      if (!parts[2]) {
+        return {
+          ok: false,
+          message: "Usage: kill zombies <n> | kill zombies all | kill all zombies",
+        };
+      }
+      if (parts[2].toLowerCase() === "all") {
+        const n = this.zombies.size;
+        this.zombies.clear();
+        return { ok: true, message: `Killed all zombies (${n})` };
+      }
+      const n = Math.max(0, Math.floor(Number(parts[2])));
+      if (!Number.isFinite(n)) {
+        return { ok: false, message: "Usage: kill zombies <n>" };
+      }
+      const killed = this.killRandomZombies(n);
+      return { ok: true, message: `Killed ${killed} zombie(s)` };
+    }
+
+    if (cmd === "kill" && parts[1]?.toLowerCase() === "all" && parts[2]?.toLowerCase() === "zombies") {
+      const n = this.zombies.size;
+      this.zombies.clear();
+      return { ok: true, message: `Killed all zombies (${n})` };
+    }
+
+    if (cmd === "help") {
+      return {
+        ok: true,
+        message:
+          "spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies",
+      };
+    }
+
+    return { ok: false, message: `Unknown command. Type help` };
   }
 
   snapshotPlayers(): PlayerSnapshot[] {
+    const beingRevived = new Set<string>();
+    for (const p of this.players.values()) {
+      if (p.reviveTargetId && p.reviveProgress > 0) {
+        beingRevived.add(p.reviveTargetId);
+      }
+    }
+
     return [...this.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
@@ -167,6 +294,11 @@ export class Room {
       color: p.color,
       hp: p.hp,
       maxHp: p.maxHp,
+      ammo: p.ammo,
+      downed: p.downed,
+      bleedout: p.bleedout,
+      reviveProgress: Math.min(1, p.reviveProgress / COMBAT.reviveDuration),
+      beingRevived: beingRevived.has(p.id),
     }));
   }
 
@@ -194,19 +326,16 @@ export class Room {
   }
 
   private seedAmbientWalkers(count: number): void {
-    const near = Math.min(4, count);
-    for (let i = 0; i < near; i++) {
-      this.spawnZombie("walker", "near");
-    }
-    for (let i = near; i < count; i++) {
-      this.spawnZombie("walker", "edge");
+    for (let i = 0; i < count; i++) {
+      const pos = randomPointInZombiePen();
+      this.spawnZombieAt("walker", pos.x, pos.z, true);
     }
   }
 
-  private spawnZombie(kind: ZombieTypeId, where: "edge" | "near" = "edge"): void {
+  private spawnZombieAt(kind: ZombieTypeId, x: number, z: number, penned: boolean): void {
     const def = ZOMBIE_DEFS[kind];
-    const pos = where === "near" ? nearTownSpawn() : edgeSpawn();
     const id = `z${nextZombieSeq++}`;
+    const pos = penned ? clampToZombiePen(x, z) : { x, z };
     this.zombies.set(id, {
       id,
       kind,
@@ -216,17 +345,33 @@ export class Room {
       yaw: 0,
       hp: def.maxHp,
       attackCd: 0,
+      penned,
     });
+  }
+
+  private killRandomZombies(n: number): number {
+    const ids = [...this.zombies.keys()];
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = ids[i]!;
+      ids[i] = ids[j]!;
+      ids[j] = tmp;
+    }
+    const take = Math.min(n, ids.length);
+    for (let i = 0; i < take; i++) {
+      this.zombies.delete(ids[i]!);
+    }
+    return take;
   }
 
   private nearestPlayer(x: number, z: number, range: number): RoomPlayer | null {
     let best: RoomPlayer | null = null;
     let bestDist = range;
     for (const player of this.players.values()) {
-      if (player.hp <= 0) continue;
       const d = distXZ(x, z, player.x, player.z);
-      if (d < bestDist) {
-        bestDist = d;
+      const score = player.downed ? d + 8 : d;
+      if (score < bestDist) {
+        bestDist = score;
         best = player;
       }
     }
@@ -234,33 +379,211 @@ export class Room {
   }
 
   private hurtPlayer(player: RoomPlayer, damage: number): void {
-    if (player.iFrames > 0 || player.hp <= 0) return;
+    if (player.downed || player.iFrames > 0) return;
     player.hp = Math.max(0, player.hp - damage);
     player.iFrames = PLAYER.hurtIFrames;
-    if (player.hp <= 0) {
-      this.respawnPlayer(player);
-    }
+    if (player.hp <= 0) this.downPlayer(player);
+  }
+
+  private downPlayer(player: RoomPlayer): void {
+    player.downed = true;
+    player.hp = 0;
+    player.bleedout = COMBAT.bleedoutSeconds;
+    player.forward = 0;
+    player.strafe = 0;
+    player.vy = 0;
+    player.y = 0;
+    player.grounded = true;
+    player.shootQueued = false;
+    player.meleeQueued = false;
+    player.jumpQueued = false;
+    player.reviveProgress = 0;
+    player.reviveTargetId = null;
+    this.tickEvents.push({ kind: "down", playerId: player.id });
   }
 
   private respawnPlayer(player: RoomPlayer): void {
-    const slot = Math.min(this.players.size - 1, SPAWN_OFFSETS.length - 1);
-    const offset = SPAWN_OFFSETS[Math.max(0, slot)] ?? SPAWN_OFFSETS[0]!;
+    const slot = Math.min(Math.max(this.players.size - 1, 0), SPAWN_OFFSETS.length - 1);
+    const offset = SPAWN_OFFSETS[slot] ?? SPAWN_OFFSETS[0]!;
     player.x = SPAWN_POSITION.x + offset.x;
     player.z = SPAWN_POSITION.z + offset.z;
     player.y = 0;
+    player.vy = 0;
+    player.grounded = true;
     player.hp = player.maxHp;
+    player.downed = false;
+    player.bleedout = 0;
     player.iFrames = PLAYER.respawnIFrames;
     player.forward = 0;
     player.strafe = 0;
+    player.reviveProgress = 0;
+    player.reviveTargetId = null;
+  }
+
+  private damageZombie(zombie: RoomZombie, amount: number, by: string): boolean {
+    zombie.hp -= amount;
+    if (zombie.hp <= 0) {
+      this.zombies.delete(zombie.id);
+      this.tickEvents.push({ kind: "kill", zombieId: zombie.id, by });
+      return true;
+    }
+    return false;
+  }
+
+  private tryShoot(player: RoomPlayer): void {
+    const gun = WEAPONS.pistol;
+    if (player.weaponCd > 0 || player.ammo < gun.ammoCost) {
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
+      return;
+    }
+
+    player.ammo -= gun.ammoCost;
+    player.weaponCd = gun.cooldown;
+
+    const origin = eyePosition(player.x, player.y, player.z);
+    const dir = lookDirection(player.yaw, player.pitch);
+    const wallT = firstWallHit(origin, dir, gun.range, this.solids);
+    const maxT = wallT ?? gun.range;
+
+    let bestId: string | null = null;
+    let bestT = maxT;
+    for (const zombie of this.zombies.values()) {
+      const def = ZOMBIE_DEFS[zombie.kind];
+      const t = raycastCapsuleXZ(
+        origin,
+        dir,
+        zombie.x,
+        zombie.z,
+        def.radius * 1.25,
+        0.1,
+        def.height + 0.2,
+        maxT,
+      );
+      if (t !== null && t < bestT) {
+        bestT = t;
+        bestId = zombie.id;
+      }
+    }
+
+    if (bestId) {
+      const zombie = this.zombies.get(bestId);
+      if (zombie) this.damageZombie(zombie, gun.damage, player.id);
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: true });
+    } else {
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
+    }
+  }
+
+  private tryMelee(player: RoomPlayer): void {
+    const melee = WEAPONS.melee;
+    if (player.weaponCd > 0) {
+      this.tickEvents.push({ kind: "melee", playerId: player.id, hit: false });
+      return;
+    }
+    player.weaponCd = melee.cooldown;
+
+    let best: RoomZombie | null = null;
+    let bestDist = melee.range;
+    for (const zombie of this.zombies.values()) {
+      if (
+        !inMeleeCone(
+          player.x,
+          player.z,
+          player.yaw,
+          zombie.x,
+          zombie.z,
+          melee.range,
+          melee.coneDeg ?? 45,
+        )
+      ) {
+        continue;
+      }
+      const d = distXZ(player.x, player.z, zombie.x, zombie.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = zombie;
+      }
+    }
+
+    if (best) {
+      this.damageZombie(best, melee.damage, player.id);
+      this.tickEvents.push({ kind: "melee", playerId: player.id, hit: true });
+    } else {
+      this.tickEvents.push({ kind: "melee", playerId: player.id, hit: false });
+    }
+  }
+
+  private updateRevive(player: RoomPlayer, dt: number): void {
+    if (player.downed || !player.interactHeld) {
+      player.reviveProgress = 0;
+      player.reviveTargetId = null;
+      return;
+    }
+
+    let target: RoomPlayer | null = null;
+    let best = COMBAT.reviveRange;
+    for (const other of this.players.values()) {
+      if (other.id === player.id || !other.downed) continue;
+      const d = distXZ(player.x, player.z, other.x, other.z);
+      if (d < best) {
+        best = d;
+        target = other;
+      }
+    }
+
+    if (!target) {
+      player.reviveProgress = 0;
+      player.reviveTargetId = null;
+      return;
+    }
+
+    if (player.reviveTargetId !== target.id) {
+      player.reviveTargetId = target.id;
+      player.reviveProgress = 0;
+    }
+
+    player.reviveProgress += dt;
+    if (player.reviveProgress >= COMBAT.reviveDuration) {
+      target.downed = false;
+      target.bleedout = 0;
+      target.hp = Math.round(target.maxHp * COMBAT.reviveHpFraction);
+      target.iFrames = PLAYER.hurtIFrames;
+      this.tickEvents.push({ kind: "revive", playerId: target.id, by: player.id });
+      player.reviveProgress = 0;
+      player.reviveTargetId = null;
+    }
+  }
+
+  private isActivelyBeingRevived(targetId: string): boolean {
+    for (const p of this.players.values()) {
+      if (p.id === targetId || p.downed) continue;
+      if (p.reviveTargetId === targetId && p.interactHeld && p.reviveProgress > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private step(): void {
     const dt = TICK_MS / 1000;
     this.tick += 1;
+    this.tickEvents = [];
 
+    // Pass 1: living players move / fight / revive.
     for (const player of this.players.values()) {
-      if (player.iFrames > 0) {
-        player.iFrames = Math.max(0, player.iFrames - dt);
+      if (player.iFrames > 0) player.iFrames = Math.max(0, player.iFrames - dt);
+      if (player.weaponCd > 0) player.weaponCd = Math.max(0, player.weaponCd - dt);
+
+      if (player.downed) {
+        player.forward = 0;
+        player.strafe = 0;
+        player.shootQueued = false;
+        player.meleeQueued = false;
+        player.jumpQueued = false;
+        player.y = 0;
+        player.vy = 0;
+        player.grounded = true;
+        continue;
       }
 
       const moved = applyPlayerMovement(
@@ -276,47 +599,79 @@ export class Room {
       );
       player.x = moved.x;
       player.z = moved.z;
+
+      const jump = player.jumpQueued;
+      player.jumpQueued = false;
+      const vert = applyVerticalMovement(player.y, player.vy, jump, dt, player.grounded);
+      player.y = vert.y;
+      player.vy = vert.vy;
+      player.grounded = vert.grounded;
+
+      if (player.shootQueued) {
+        player.shootQueued = false;
+        this.tryShoot(player);
+      }
+      if (player.meleeQueued) {
+        player.meleeQueued = false;
+        this.tryMelee(player);
+      }
+
+      this.updateRevive(player, dt);
+    }
+
+    // Pass 2: bleedout (paused while an ally is actively reviving).
+    for (const player of this.players.values()) {
+      if (!player.downed) continue;
+      if (!this.isActivelyBeingRevived(player.id)) {
+        player.bleedout -= dt;
+      }
+      if (player.bleedout <= 0) this.respawnPlayer(player);
     }
 
     for (const zombie of this.zombies.values()) {
       const def = ZOMBIE_DEFS[zombie.kind];
-      if (zombie.attackCd > 0) {
-        zombie.attackCd = Math.max(0, zombie.attackCd - dt);
-      }
+      if (zombie.attackCd > 0) zombie.attackCd = Math.max(0, zombie.attackCd - dt);
 
       const target = this.nearestPlayer(zombie.x, zombie.z, def.aggroRange);
-      if (!target) continue;
-
-      const dist = distXZ(zombie.x, zombie.z, target.x, target.z);
-      if (dist > def.attackRange * 0.85) {
-        const moved = moveToward(
-          zombie.x,
-          zombie.z,
-          target.x,
-          target.z,
-          def.speed,
-          dt,
-          def.radius,
-          this.solids,
-        );
-        zombie.x = moved.x;
-        zombie.z = moved.z;
-        zombie.yaw = moved.yaw;
-      } else {
-        zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
-        if (zombie.attackCd <= 0) {
-          this.hurtPlayer(target, def.damage);
-          zombie.attackCd = def.attackCooldown;
+      if (target) {
+        const dist = distXZ(zombie.x, zombie.z, target.x, target.z);
+        if (dist > def.attackRange * 0.85) {
+          const moved = moveToward(
+            zombie.x,
+            zombie.z,
+            target.x,
+            target.z,
+            def.speed,
+            dt,
+            def.radius,
+            this.solids,
+          );
+          zombie.x = moved.x;
+          zombie.z = moved.z;
+          zombie.yaw = moved.yaw;
+        } else {
+          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
+          if (zombie.attackCd <= 0 && !target.downed) {
+            this.hurtPlayer(target, def.damage);
+            zombie.attackCd = def.attackCooldown;
+          }
         }
+      }
+
+      if (zombie.penned) {
+        const c = clampToZombiePen(zombie.x, zombie.z);
+        zombie.x = c.x;
+        zombie.z = c.z;
       }
     }
 
-    // Keep a sidewalk presence without combat kills yet.
-    if (this.zombies.size < M4_AMBIENT.minAlive) {
+    const pennedCount = [...this.zombies.values()].filter((z) => z.penned).length;
+    if (pennedCount < M4_AMBIENT.minAlive) {
       this.respawnAcc += dt;
       if (this.respawnAcc >= M4_AMBIENT.respawnDelaySec) {
         this.respawnAcc = 0;
-        this.spawnZombie("walker");
+        const pos = randomPointInZombiePen();
+        this.spawnZombieAt("walker", pos.x, pos.z, true);
       }
     } else {
       this.respawnAcc = 0;
@@ -324,6 +679,7 @@ export class Room {
 
     const players = this.snapshotPlayers();
     const zombies = this.snapshotZombies();
+    const events = this.tickEvents.length ? this.tickEvents : undefined;
     for (const player of this.players.values()) {
       send(player.ws, {
         type: "snapshot",
@@ -331,6 +687,7 @@ export class Room {
         you: player.id,
         players,
         zombies,
+        events,
       });
     }
   }
@@ -378,11 +735,30 @@ export class RoomManager {
 
   handleInput(
     ws: WebSocket,
-    input: { forward: number; strafe: number; yaw: number; pitch: number },
+    input: {
+      forward: number;
+      strafe: number;
+      yaw: number;
+      pitch: number;
+      shoot?: boolean;
+      melee?: boolean;
+      interact?: boolean;
+      jump?: boolean;
+    },
   ): void {
     const binding = this.bySocket.get(ws);
     if (!binding) return;
     binding.room.setInput(binding.playerId, input);
+  }
+
+  handleDevCommand(ws: WebSocket, line: string): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) {
+      send(ws, { type: "devResult", ok: false, message: "Join a room first" });
+      return;
+    }
+    const result = binding.room.handleDevCommand(binding.playerId, line);
+    send(ws, { type: "devResult", ok: result.ok, message: result.message });
   }
 
   disconnect(ws: WebSocket): void {

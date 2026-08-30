@@ -1,7 +1,10 @@
 import {
+  COMBAT,
   MILESTONE,
   PLAYER,
+  distXZ,
   getSolidAabbs,
+  type GameEvent,
   type PlayerSnapshot,
   type ServerMessage,
   type ZombieSnapshot,
@@ -12,6 +15,7 @@ import { ClientSocket } from "./net/ClientSocket";
 import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
 import { ZombieRenderer } from "./render/zombies";
+import { DevConsole } from "./ui/DevConsole";
 
 const lobbyEl = document.getElementById("lobby")!;
 const lobbyStatusEl = document.getElementById("lobby-status")!;
@@ -24,6 +28,12 @@ const btnJoin = document.getElementById("btn-join") as HTMLButtonElement;
 const hudEl = document.getElementById("hud")!;
 const crosshairEl = document.getElementById("crosshair")!;
 const hurtFlashEl = document.getElementById("hurt-flash")!;
+const hitMarkerEl = document.getElementById("hit-marker")!;
+const promptEl = document.getElementById("prompt")!;
+const reviveHudEl = document.getElementById("revive-hud")!;
+const reviveFillEl = document.getElementById("revive-fill")!;
+const reviveTimeEl = document.getElementById("revive-time")!;
+const downedBannerEl = document.getElementById("downed-banner")!;
 const statusEl = document.getElementById("status")!;
 const rttEl = document.getElementById("rtt")!;
 const milestoneEl = document.getElementById("milestone")!;
@@ -33,6 +43,7 @@ const playerCountEl = document.getElementById("player-count")!;
 const zombieCountEl = document.getElementById("zombie-count")!;
 const hpFillEl = document.getElementById("hp-fill")!;
 const hpTextEl = document.getElementById("hp-text")!;
+const ammoEl = document.getElementById("ammo")!;
 const hintEl = document.getElementById("hint")!;
 
 milestoneEl.textContent = MILESTONE;
@@ -74,6 +85,20 @@ function updateHpHud(hp: number, maxHp: number): void {
   lastKnownHp = hp;
 }
 
+function flashHitMarker(): void {
+  hitMarkerEl.classList.add("on");
+  window.setTimeout(() => hitMarkerEl.classList.remove("on"), 120);
+}
+
+function handleEvents(events: GameEvent[] | undefined, you: string): void {
+  if (!events) return;
+  for (const ev of events) {
+    if ((ev.kind === "shot" || ev.kind === "melee") && ev.playerId === you && ev.hit) {
+      flashHitMarker();
+    }
+  }
+}
+
 const socket = new ClientSocket({
   onStatus: setNetStatus,
   onMessage: (msg) => {
@@ -87,6 +112,10 @@ const socket = new ClientSocket({
     }
     if (msg.type === "error") {
       setLobbyError(msg.message);
+      return;
+    }
+    if (msg.type === "devResult") {
+      game?.onDevResult(msg.ok, msg.message);
       return;
     }
     if (msg.type === "roomJoined") {
@@ -141,10 +170,12 @@ function enterWorld(players: PlayerSnapshot[], zombies: ZombieSnapshot[]): void 
   const me = players.find((p) => p.id === session!.playerId);
   lastKnownHp = me?.hp ?? PLAYER.maxHp;
   updateHpHud(me?.hp ?? PLAYER.maxHp, me?.maxHp ?? PLAYER.maxHp);
+  ammoEl.textContent = String(me?.ammo ?? 0);
 
   if (game) game.dispose();
-  game = startGame(session, players, zombies, (packet) => {
-    socket.send({ type: "input", ...packet });
+  game = startGame(session, players, zombies, {
+    sendInput: (packet) => socket.send({ type: "input", ...packet }),
+    sendDev: (line) => socket.send({ type: "devCommand", line }),
   });
 }
 
@@ -152,13 +183,20 @@ function startGame(
   active: Session,
   initialPlayers: PlayerSnapshot[],
   initialZombies: ZombieSnapshot[],
-  sendInput: (packet: {
-    seq: number;
-    forward: number;
-    strafe: number;
-    yaw: number;
-    pitch: number;
-  }) => void,
+  net: {
+    sendInput: (packet: {
+      seq: number;
+      forward: number;
+      strafe: number;
+      yaw: number;
+      pitch: number;
+      shoot: boolean;
+      melee: boolean;
+      interact: boolean;
+      jump: boolean;
+    }) => void;
+    sendDev: (line: string) => void;
+  },
 ) {
   const solids = getSolidAabbs();
   const me = initialPlayers.find((p) => p.id === active.playerId);
@@ -191,6 +229,15 @@ function startGame(
     pitch: me?.pitch ?? 0,
   });
 
+  const consoleUi = new DevConsole({
+    onSubmit: (line) => net.sendDev(line),
+    onOpenChange: (open) => {
+      fp.setBlocked(open);
+      crosshairEl.classList.toggle("visible", !open);
+    },
+  });
+  consoleUi.append("Dev console ready. Press ` to toggle.", "info");
+
   remotes.sync(initialPlayers, active.playerId);
   zombies.sync(initialZombies);
 
@@ -204,18 +251,87 @@ function startGame(
   let last = performance.now();
   let inputAcc = 0;
   let alive = true;
+  let latestPlayers: PlayerSnapshot[] = initialPlayers;
+
+  function updateReviveHud(self: PlayerSnapshot): void {
+    const progress = self.reviveProgress;
+    const being = self.beingRevived;
+    // Find progress if we're the downed one being revived
+    let shown = progress;
+    let label = "Reviving";
+    if (being && progress <= 0) {
+      const reviver = latestPlayers.find((p) => p.id !== self.id && p.reviveProgress > 0);
+      shown = reviver?.reviveProgress ?? 0;
+      label = "Being revived";
+    } else if (progress > 0) {
+      const target = latestPlayers.find((p) => p.downed && p.beingRevived);
+      label = target ? `Reviving ${target.name}` : "Reviving";
+    }
+
+    if (shown > 0 || (being && shown >= 0 && latestPlayers.some((p) => p.reviveProgress > 0))) {
+      const p = Math.max(shown, being ? latestPlayers.find((x) => x.reviveProgress > 0)?.reviveProgress ?? 0 : 0);
+      if (p > 0) {
+        reviveHudEl.classList.add("visible");
+        reviveHudEl.querySelector(".label")!.textContent = label;
+        reviveFillEl.style.width = `${Math.round(p * 100)}%`;
+        const elapsed = p * COMBAT.reviveDuration;
+        reviveTimeEl.textContent = `${elapsed.toFixed(1)} / ${COMBAT.reviveDuration.toFixed(1)}s`;
+        return;
+      }
+    }
+    reviveHudEl.classList.remove("visible");
+  }
+
+  function updatePrompts(self: PlayerSnapshot): void {
+    fp.setDowned(self.downed);
+    updateReviveHud(self);
+
+    if (self.downed) {
+      downedBannerEl.classList.add("visible");
+      downedBannerEl.textContent = self.beingRevived
+        ? `DOWNED — revive in progress · bleedout paused (${Math.max(0, self.bleedout).toFixed(0)}s left)`
+        : `DOWNED — bleedout ${Math.max(0, self.bleedout).toFixed(0)}s · wait for revive`;
+      promptEl.classList.remove("visible");
+      return;
+    }
+    downedBannerEl.classList.remove("visible");
+
+    let nearestDown: PlayerSnapshot | null = null;
+    let best = COMBAT.reviveRange;
+    for (const p of latestPlayers) {
+      if (p.id === active.playerId || !p.downed) continue;
+      const d = distXZ(fp.state.x, fp.state.z, p.x, p.z);
+      if (d < best) {
+        best = d;
+        nearestDown = p;
+      }
+    }
+
+    if (nearestDown && self.reviveProgress <= 0) {
+      promptEl.classList.add("visible");
+      promptEl.textContent = `Hold E to revive ${nearestDown.name} (${COMBAT.reviveDuration}s)`;
+    } else if (!nearestDown) {
+      promptEl.classList.remove("visible");
+    } else {
+      promptEl.classList.remove("visible");
+    }
+  }
 
   function onSnapshot(msg: Extract<ServerMessage, { type: "snapshot" }>): void {
     if (msg.you !== active.playerId) return;
+    latestPlayers = msg.players;
     playerCountEl.textContent = String(msg.players.length);
     zombieCountEl.textContent = String(msg.zombies.length);
     const self = msg.players.find((p) => p.id === active.playerId);
     if (self) {
       fp.reconcile(self);
       updateHpHud(self.hp, self.maxHp);
+      ammoEl.textContent = String(self.ammo);
+      updatePrompts(self);
     }
     remotes.sync(msg.players, active.playerId);
     zombies.sync(msg.zombies);
+    handleEvents(msg.events, active.playerId);
   }
 
   function frame(now: number): void {
@@ -230,17 +346,26 @@ function startGame(
     inputAcc += dt;
     if (inputAcc >= 1 / 30) {
       inputAcc = 0;
-      sendInput(fp.nextInputPacket());
+      if (!consoleUi.isOpen()) {
+        net.sendInput(fp.nextInputPacket());
+      }
     }
 
-    camera.position.set(fp.state.x, fp.state.y + PLAYER.eyeHeight, fp.state.z);
+    const self = latestPlayers.find((p) => p.id === active.playerId);
+    camera.position.set(
+      fp.state.x,
+      fp.state.y + (self?.downed ? 0.55 : PLAYER.eyeHeight),
+      fp.state.z,
+    );
     camera.rotation.order = "YXZ";
     camera.rotation.y = fp.state.yaw;
     camera.rotation.x = fp.state.pitch;
 
-    hintEl.textContent = fp.isLocked
-      ? "WASD move · mouse look · Esc release · avoid walkers"
-      : "Click the game to capture mouse";
+    hintEl.textContent = consoleUi.isOpen()
+      ? "Dev console open — ` to close"
+      : fp.isLocked
+        ? "LMB shoot · F melee · Space jump · E revive · ` console"
+        : "Click the game to capture mouse";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
@@ -250,12 +375,19 @@ function startGame(
 
   return {
     onSnapshot,
+    onDevResult(ok: boolean, message: string) {
+      consoleUi.append(message, ok ? "ok" : "err");
+    },
     dispose() {
       alive = false;
       window.removeEventListener("resize", onResize);
       fp.dispose();
+      consoleUi.dispose();
       renderer.dispose();
       renderer.domElement.remove();
+      promptEl.classList.remove("visible");
+      reviveHudEl.classList.remove("visible");
+      downedBannerEl.classList.remove("visible");
     },
   };
 }

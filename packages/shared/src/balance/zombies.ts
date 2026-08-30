@@ -56,7 +56,7 @@ export const ZOMBIE_DEFS: Record<ZombieTypeId, ZombieDef> = {
   },
 };
 
-/** Ambient sidewalk swarm for M4 (walkers only). */
+/** Ambient walkers quarantined in the pen. */
 export const M4_AMBIENT = {
   count: 10,
   respawnDelaySec: 4,

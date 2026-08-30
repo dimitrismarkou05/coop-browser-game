@@ -6,6 +6,12 @@ export type MoveAxes = {
   strafe: number;
 };
 
+export type VerticalState = {
+  y: number;
+  vy: number;
+  grounded: boolean;
+};
+
 /** Normalize WASD-style axes to unit length. */
 export function normalizeAxes(forward: number, strafe: number): MoveAxes {
   const len = Math.hypot(forward, strafe);
@@ -39,6 +45,36 @@ export function applyPlayerMovement(
   const dz = (-cos * axes.forward - sin * axes.strafe) * dist;
 
   return moveWithAabbCollision(x, z, dx, dz, radius, solids);
+}
+
+/** Integrate jump / gravity. Ground is y=0 for V1 (flat map). */
+export function applyVerticalMovement(
+  y: number,
+  vy: number,
+  jumpQueued: boolean,
+  dt: number,
+  groundedIn = y <= 0.001 && vy <= 0,
+): VerticalState {
+  let nextVy = vy;
+  let grounded = groundedIn;
+
+  if (jumpQueued && grounded) {
+    nextVy = PLAYER.jumpSpeed;
+    grounded = false;
+  }
+
+  nextVy -= PLAYER.gravity * dt;
+  let nextY = y + nextVy * dt;
+
+  if (nextY <= 0) {
+    nextY = 0;
+    nextVy = 0;
+    grounded = true;
+  } else {
+    grounded = false;
+  }
+
+  return { y: nextY, vy: nextVy, grounded };
 }
 
 export function clampPitch(pitch: number): number {

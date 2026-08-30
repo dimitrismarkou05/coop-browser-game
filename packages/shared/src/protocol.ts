@@ -13,6 +13,13 @@ export type PlayerSnapshot = {
   color: number;
   hp: number;
   maxHp: number;
+  ammo: number;
+  downed: boolean;
+  bleedout: number;
+  /** 0–1 progress while this player is performing a revive. */
+  reviveProgress: number;
+  /** True if someone is currently reviving this (downed) player. */
+  beingRevived: boolean;
 };
 
 export type ZombieSnapshot = {
@@ -25,6 +32,14 @@ export type ZombieSnapshot = {
   hp: number;
 };
 
+export type GameEvent =
+  | { kind: "shot"; playerId: string; hit: boolean }
+  | { kind: "melee"; playerId: string; hit: boolean }
+  | { kind: "kill"; zombieId: string; by: string }
+  | { kind: "down"; playerId: string }
+  | { kind: "revive"; playerId: string; by: string }
+  | { kind: "dev"; message: string };
+
 export type ClientMessage =
   | { type: "ping"; clientTime: number }
   | { type: "createRoom"; name: string }
@@ -36,7 +51,12 @@ export type ClientMessage =
       strafe: number;
       yaw: number;
       pitch: number;
-    };
+      shoot?: boolean;
+      melee?: boolean;
+      interact?: boolean;
+      jump?: boolean;
+    }
+  | { type: "devCommand"; line: string };
 
 export type ServerMessage =
   | { type: "welcome"; milestone: string; serverTime: number }
@@ -55,8 +75,10 @@ export type ServerMessage =
       you: string;
       players: PlayerSnapshot[];
       zombies: ZombieSnapshot[];
+      events?: GameEvent[];
     }
-  | { type: "playerLeft"; playerId: string };
+  | { type: "playerLeft"; playerId: string }
+  | { type: "devResult"; ok: boolean; message: string };
 
 function isRecord(raw: unknown): raw is Record<string, unknown> {
   return typeof raw === "object" && raw !== null;
@@ -96,7 +118,16 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           strafe: raw.strafe,
           yaw: raw.yaw,
           pitch: raw.pitch,
+          shoot: Boolean(raw.shoot),
+          melee: Boolean(raw.melee),
+          interact: Boolean(raw.interact),
+          jump: Boolean(raw.jump),
         };
+      }
+      return null;
+    case "devCommand":
+      if (typeof raw.line === "string") {
+        return { type: "devCommand", line: raw.line };
       }
       return null;
     default:
@@ -114,6 +145,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
     case "roomJoined":
     case "snapshot":
     case "playerLeft":
+    case "devResult":
       return raw as ServerMessage;
     default:
       return null;

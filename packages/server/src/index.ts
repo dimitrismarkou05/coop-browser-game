@@ -91,6 +91,11 @@ wss.on("connection", (ws) => {
       rooms.handleInput(ws, msg);
       return;
     }
+
+    if (msg.type === "devCommand") {
+      rooms.handleDevCommand(ws, msg.line);
+      return;
+    }
   });
 
   ws.on("close", () => {

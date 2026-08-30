@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Co-op Zombie — M4</title>
+    <title>Co-op Zombie — M5</title>
     <style>
       * {
         box-sizing: border-box;
@@ -55,9 +55,9 @@
         position: fixed;
         left: 50%;
         top: 50%;
-        width: 14px;
-        height: 14px;
-        margin: -7px 0 0 -7px;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
         z-index: 9;
         pointer-events: none;
         display: none;
@@ -69,19 +69,30 @@
       #crosshair::after {
         content: "";
         position: absolute;
-        background: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
       }
       #crosshair::before {
-        left: 6px;
-        top: 0;
+        left: 10px;
+        top: 2px;
         width: 2px;
-        height: 14px;
+        height: 18px;
       }
       #crosshair::after {
-        left: 0;
-        top: 6px;
-        width: 14px;
+        left: 2px;
+        top: 10px;
+        width: 18px;
         height: 2px;
+      }
+      #crosshair .dot {
+        position: absolute;
+        left: 9px;
+        top: 9px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
       }
       #lobby {
         position: fixed;
@@ -213,6 +224,153 @@
       #hurt-flash.on {
         opacity: 1;
       }
+      #hit-marker {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
+        z-index: 11;
+        pointer-events: none;
+        opacity: 0;
+        border: 2px solid #f0f6fc;
+        transform: rotate(45deg) scale(0.6);
+        transition: opacity 0.12s ease;
+      }
+      #hit-marker.on {
+        opacity: 0.95;
+      }
+      #prompt {
+        position: fixed;
+        left: 50%;
+        bottom: 18%;
+        transform: translateX(-50%);
+        z-index: 12;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: rgba(13, 17, 23, 0.85);
+        border: 1px solid #30363d;
+        font-size: 14px;
+        display: none;
+        pointer-events: none;
+      }
+      #prompt.visible {
+        display: block;
+      }
+      #revive-hud {
+        position: fixed;
+        left: 50%;
+        bottom: 24%;
+        transform: translateX(-50%);
+        z-index: 12;
+        width: min(280px, 70vw);
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(13, 17, 23, 0.9);
+        border: 1px solid #3d9a5f;
+        display: none;
+        pointer-events: none;
+      }
+      #revive-hud.visible {
+        display: block;
+      }
+      #revive-hud .label {
+        font-size: 12px;
+        color: #8b949e;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #revive-bar {
+        height: 10px;
+        border-radius: 999px;
+        background: #21262d;
+        overflow: hidden;
+        border: 1px solid #30363d;
+      }
+      #revive-fill {
+        height: 100%;
+        width: 0%;
+        background: #3d9a5f;
+        transition: width 0.08s linear;
+      }
+      #revive-time {
+        margin-top: 6px;
+        font-size: 13px;
+        color: #e6edf3;
+      }
+      #dev-console {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        z-index: 40;
+        display: none;
+        flex-direction: column;
+        max-width: 720px;
+        margin: 0 auto;
+        background: rgba(8, 12, 18, 0.94);
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      #dev-console.open {
+        display: flex;
+      }
+      #dev-console .dev-log {
+        max-height: 180px;
+        overflow: auto;
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #c9d1d9;
+      }
+      #dev-console .dev-line.cmd { color: #79c0ff; }
+      #dev-console .dev-line.ok { color: #3fb950; }
+      #dev-console .dev-line.err { color: #f85149; }
+      #dev-console .dev-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-top: 1px solid #30363d;
+      }
+      #dev-console .dev-prompt { color: #3d9a5f; }
+      #dev-console .dev-input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        color: #e6edf3;
+        font: inherit;
+        margin: 0;
+        padding: 4px 0;
+      }
+      #dev-console .dev-hint {
+        padding: 0 12px 8px;
+        font-size: 11px;
+        color: #8b949e;
+      }
+      #downed-banner {
+        position: fixed;
+        left: 50%;
+        top: 18%;
+        transform: translateX(-50%);
+        z-index: 12;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: rgba(120, 20, 20, 0.88);
+        border: 1px solid #f85149;
+        font-size: 15px;
+        display: none;
+        pointer-events: none;
+        text-align: center;
+      }
+      #downed-banner.visible {
+        display: block;
+      }
       canvas {
         display: block;
       }
@@ -222,7 +380,7 @@
     <div id="lobby">
       <div class="panel">
         <h1>Co-op Zombie</h1>
-        <p>M4 — create or join a room. Walkers hunt you.</p>
+        <p>M5+ — quarantine pen, jump, revive timer, dev console (`).</p>
         <label for="name">Display name</label>
         <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" />
         <label for="code">Invite code (join)</label>
@@ -254,13 +412,23 @@
         <div id="hp-bar"><div id="hp-fill"></div></div>
         <div id="hp-text">—</div>
       </div>
+      <div class="label" style="margin-top: 8px">Ammo</div>
+      <div id="ammo">—</div>
       <div class="label" style="margin-top: 8px">Zombies</div>
       <div id="zombie-count">—</div>
       <div class="label" style="margin-top: 8px">Controls</div>
       <div id="hint">Click the game to capture mouse</div>
     </div>
+    <div id="prompt"></div>
+    <div id="revive-hud">
+      <div class="label">Reviving</div>
+      <div id="revive-bar"><div id="revive-fill"></div></div>
+      <div id="revive-time">0.0 / 5.0s</div>
+    </div>
+    <div id="downed-banner"></div>
     <div id="hurt-flash" aria-hidden="true"></div>
-    <div id="crosshair" aria-hidden="true"></div>
+    <div id="hit-marker" aria-hidden="true"></div>
+    <div id="crosshair" aria-hidden="true"><div class="dot"></div></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

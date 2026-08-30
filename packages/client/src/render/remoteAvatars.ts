@@ -2,7 +2,7 @@ import type { PlayerSnapshot } from "@coop/shared";
 import { PLAYER } from "@coop/shared";
 import * as THREE from "three";
 
-function makeNameSprite(name: string, color: number): THREE.Sprite {
+function makeNameSprite(name: string, color: number, downed: boolean): THREE.Sprite {
   const canvas = document.createElement("canvas");
   canvas.width = 256;
   canvas.height = 64;
@@ -10,17 +10,17 @@ function makeNameSprite(name: string, color: number): THREE.Sprite {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.fillRect(16, 12, 224, 40);
-  ctx.font = "bold 28px Segoe UI, sans-serif";
+  ctx.font = "bold 26px Segoe UI, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
-  ctx.fillText(name.slice(0, 16), 128, 34);
+  ctx.fillStyle = downed ? "#f85149" : `#${color.toString(16).padStart(6, "0")}`;
+  ctx.fillText(downed ? `${name} [DOWN]` : name.slice(0, 16), 128, 34);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(1.6, 0.4, 1);
+  sprite.scale.set(1.8, 0.45, 1);
   sprite.position.y = PLAYER.height + 0.25;
   return sprite;
 }
@@ -29,6 +29,9 @@ type RemoteVisual = {
   root: THREE.Group;
   body: THREE.Mesh;
   label: THREE.Sprite;
+  downed: boolean;
+  name: string;
+  color: number;
   target: { x: number; y: number; z: number; yaw: number };
 };
 
@@ -51,11 +54,25 @@ export class RemotePlayers {
         this.scene.add(remote.root);
       }
 
+      if (remote.downed !== player.downed || remote.name !== player.name) {
+        remote.root.remove(remote.label);
+        const map = remote.label.material.map;
+        remote.label.material.dispose();
+        map?.dispose();
+        remote.label = makeNameSprite(player.name, player.color, player.downed);
+        remote.root.add(remote.label);
+        remote.downed = player.downed;
+        remote.name = player.name;
+      }
+
       remote.target.x = player.x;
       remote.target.y = player.y;
       remote.target.z = player.z;
       remote.target.yaw = player.yaw;
       (remote.body.material as THREE.MeshStandardMaterial).color.setHex(player.color);
+      remote.body.rotation.x = player.downed ? Math.PI / 2 : 0;
+      remote.body.position.y = player.downed ? PLAYER.radius : PLAYER.height / 2;
+      remote.label.position.y = player.downed ? 1.1 : PLAYER.height + 0.25;
     }
 
     for (const [id, remote] of this.remotes) {
@@ -90,16 +107,21 @@ export class RemotePlayers {
       new THREE.CapsuleGeometry(PLAYER.radius, PLAYER.height - PLAYER.radius * 2, 4, 8),
       new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.7 }),
     );
-    body.position.y = PLAYER.height / 2;
+    body.position.y = player.downed ? PLAYER.radius : PLAYER.height / 2;
+    body.rotation.x = player.downed ? Math.PI / 2 : 0;
     root.add(body);
 
-    const label = makeNameSprite(player.name, player.color);
+    const label = makeNameSprite(player.name, player.color, player.downed);
+    if (player.downed) label.position.y = 1.1;
     root.add(label);
 
     return {
       root,
       body,
       label,
+      downed: player.downed,
+      name: player.name,
+      color: player.color,
       target: { x: player.x, y: player.y, z: player.z, yaw: player.yaw },
     };
   }

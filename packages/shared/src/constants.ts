@@ -2,7 +2,7 @@
 export const DEFAULT_SERVER_PORT = 2567;
 
 /** Milestone tag — bump as milestones complete. */
-export const MILESTONE = "M4" as const;
+export const MILESTONE = "M5" as const;
 
 export const TICK_HZ = 15;
 export const TICK_MS = 1000 / TICK_HZ;
@@ -21,6 +21,8 @@ export const PLAYER = {
   /** Seconds of invulnerability after a hit / respawn. */
   hurtIFrames: 0.55,
   respawnIFrames: 2,
+  jumpSpeed: 7.2,
+  gravity: 22,
 } as const;
 
 /** Placeholder map bounds (world units). */
