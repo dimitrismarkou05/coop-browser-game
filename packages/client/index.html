@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Co-op Zombie — M4</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0d1117;
+        color: #e6edf3;
+        user-select: none;
+      }
+      #hud {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(13, 17, 23, 0.82);
+        border: 1px solid #30363d;
+        min-width: 240px;
+        line-height: 1.45;
+        font-size: 14px;
+        pointer-events: none;
+        display: none;
+      }
+      #hud.visible {
+        display: block;
+      }
+      #hud .label {
+        color: #8b949e;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #status.connected {
+        color: #3fb950;
+      }
+      #status.disconnected {
+        color: #f85149;
+      }
+      #status.connecting {
+        color: #d29922;
+      }
+      #crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 14px;
+        height: 14px;
+        margin: -7px 0 0 -7px;
+        z-index: 9;
+        pointer-events: none;
+        display: none;
+      }
+      #crosshair.visible {
+        display: block;
+      }
+      #crosshair::before,
+      #crosshair::after {
+        content: "";
+        position: absolute;
+        background: rgba(255, 255, 255, 0.85);
+      }
+      #crosshair::before {
+        left: 6px;
+        top: 0;
+        width: 2px;
+        height: 14px;
+      }
+      #crosshair::after {
+        left: 0;
+        top: 6px;
+        width: 14px;
+        height: 2px;
+      }
+      #lobby {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(ellipse at top, #1a2332 0%, #0d1117 55%),
+          #0d1117;
+      }
+      #lobby.hidden {
+        display: none;
+      }
+      .panel {
+        width: min(420px, calc(100vw - 32px));
+        padding: 28px 24px;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        background: rgba(22, 27, 34, 0.95);
+      }
+      .panel h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+        font-weight: 650;
+      }
+      .panel p {
+        margin: 0 0 20px;
+        color: #8b949e;
+        font-size: 14px;
+      }
+      label {
+        display: block;
+        margin: 0 0 6px;
+        color: #8b949e;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      input {
+        width: 100%;
+        margin-bottom: 14px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #30363d;
+        background: #0d1117;
+        color: #e6edf3;
+        font-size: 15px;
+      }
+      input:focus {
+        outline: 1px solid #3d9a5f;
+        border-color: #3d9a5f;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        flex: 1;
+        padding: 11px 14px;
+        border: none;
+        border-radius: 8px;
+        background: #3d9a5f;
+        color: #04140a;
+        font-weight: 650;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #21262d;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+      }
+      button:hover {
+        filter: brightness(1.08);
+      }
+      #lobby-status {
+        margin-top: 14px;
+        min-height: 1.2em;
+        font-size: 13px;
+        color: #8b949e;
+      }
+      #lobby-status.error {
+        color: #f85149;
+      }
+      #lobby-net {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #8b949e;
+      }
+      #hint {
+        max-width: 260px;
+      }
+      #hp-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #hp-bar {
+        flex: 1;
+        height: 10px;
+        border-radius: 999px;
+        background: #21262d;
+        overflow: hidden;
+        border: 1px solid #30363d;
+      }
+      #hp-fill {
+        height: 100%;
+        width: 100%;
+        background: #3d9a5f;
+        transition: width 0.1s linear, background 0.1s linear;
+      }
+      #hp-fill.hurt {
+        background: #d29922;
+      }
+      #hp-fill.critical {
+        background: #f85149;
+      }
+      #hurt-flash {
+        position: fixed;
+        inset: 0;
+        z-index: 8;
+        pointer-events: none;
+        background: radial-gradient(circle at center, transparent 40%, rgba(180, 20, 20, 0.45));
+        opacity: 0;
+        transition: opacity 0.15s ease;
+      }
+      #hurt-flash.on {
+        opacity: 1;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="lobby">
+      <div class="panel">
+        <h1>Co-op Zombie</h1>
+        <p>M4 — create or join a room. Walkers hunt you.</p>
+        <label for="name">Display name</label>
+        <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" />
+        <label for="code">Invite code (join)</label>
+        <input id="code" maxlength="6" placeholder="ABC123" autocomplete="off" style="text-transform: uppercase" />
+        <div class="row">
+          <button type="button" id="btn-create">Create room</button>
+          <button type="button" class="secondary" id="btn-join">Join room</button>
+        </div>
+        <div id="lobby-status"></div>
+        <div id="lobby-net">WebSocket: connecting…</div>
+      </div>
+    </div>
+
+    <div id="hud">
+      <div class="label">Milestone</div>
+      <div id="milestone">M3</div>
+      <div class="label" style="margin-top: 8px">Room</div>
+      <div id="room-code">—</div>
+      <div class="label" style="margin-top: 8px">You</div>
+      <div id="you-name">—</div>
+      <div class="label" style="margin-top: 8px">WebSocket</div>
+      <div id="status" class="connecting">Connecting…</div>
+      <div class="label" style="margin-top: 8px">RTT</div>
+      <div id="rtt">—</div>
+      <div class="label" style="margin-top: 8px">Players</div>
+      <div id="player-count">—</div>
+      <div class="label" style="margin-top: 8px">Health</div>
+      <div id="hp-row">
+        <div id="hp-bar"><div id="hp-fill"></div></div>
+        <div id="hp-text">—</div>
+      </div>
+      <div class="label" style="margin-top: 8px">Zombies</div>
+      <div id="zombie-count">—</div>
+      <div class="label" style="margin-top: 8px">Controls</div>
+      <div id="hint">Click the game to capture mouse</div>
+    </div>
+    <div id="hurt-flash" aria-hidden="true"></div>
+    <div id="crosshair" aria-hidden="true"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
