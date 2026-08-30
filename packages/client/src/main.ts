@@ -16,6 +16,7 @@ import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
 import { ZombieRenderer } from "./render/zombies";
 import { DevConsole } from "./ui/DevConsole";
+import { getPreviousNames, getRememberedName, rememberName } from "./ui/nameMemory";
 
 const lobbyEl = document.getElementById("lobby")!;
 const lobbyStatusEl = document.getElementById("lobby-status")!;
@@ -47,7 +48,29 @@ const ammoEl = document.getElementById("ammo")!;
 const hintEl = document.getElementById("hint")!;
 
 milestoneEl.textContent = MILESTONE;
-nameInput.value = `Survivor${Math.floor(Math.random() * 90 + 10)}`;
+
+function refreshNameHistory(): void {
+  const list = document.getElementById("name-history");
+  if (!(list instanceof HTMLDataListElement)) return;
+  list.innerHTML = "";
+  for (const name of getPreviousNames()) {
+    const option = document.createElement("option");
+    option.value = name;
+    list.appendChild(option);
+  }
+}
+
+const remembered = getRememberedName();
+nameInput.value = remembered || `Survivor${Math.floor(Math.random() * 90 + 10)}`;
+refreshNameHistory();
+
+function commitDisplayName(): string {
+  const name = nameInput.value.trim() || "Survivor";
+  nameInput.value = name;
+  rememberName(name);
+  refreshNameHistory();
+  return name;
+}
 
 type Session = {
   playerId: string;
@@ -119,10 +142,11 @@ const socket = new ClientSocket({
       return;
     }
     if (msg.type === "roomJoined") {
+      const name = commitDisplayName();
       session = {
         playerId: msg.playerId,
         code: msg.code,
-        name: nameInput.value.trim() || "Survivor",
+        name,
       };
       enterWorld(msg.players, msg.zombies);
       return;
@@ -140,7 +164,7 @@ window.setInterval(() => {
 
 btnCreate.addEventListener("click", () => {
   setLobbyError(null);
-  socket.send({ type: "createRoom", name: nameInput.value.trim() || "Survivor" });
+  socket.send({ type: "createRoom", name: commitDisplayName() });
 });
 
 btnJoin.addEventListener("click", () => {
@@ -150,7 +174,7 @@ btnJoin.addEventListener("click", () => {
     setLobbyError("Enter the 6-character invite code");
     return;
   }
-  socket.send({ type: "joinRoom", code, name: nameInput.value.trim() || "Survivor" });
+  socket.send({ type: "joinRoom", code, name: commitDisplayName() });
 });
 
 codeInput.addEventListener("keydown", (e) => {

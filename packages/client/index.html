@@ -382,7 +382,8 @@
         <h1>Co-op Zombie</h1>
         <p>M5+ — quarantine pen, jump, revive timer, dev console (`).</p>
         <label for="name">Display name</label>
-        <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" />
+        <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" list="name-history" />
+        <datalist id="name-history"></datalist>
         <label for="code">Invite code (join)</label>
         <input id="code" maxlength="6" placeholder="ABC123" autocomplete="off" style="text-transform: uppercase" />
         <div class="row">
