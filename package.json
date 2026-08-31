@@ -9,7 +9,8 @@
     "dev:client": "npm run dev -w @coop/client",
     "dev:server": "npm run build -w @coop/shared && npm run dev -w @coop/server",
     "build": "npm run build -w @coop/shared && npm run build -w @coop/server && npm run build -w @coop/client",
-    "start:server": "npm run build -w @coop/shared && npm run build -w @coop/server && npm run start -w @coop/server"
+    "build:server": "npm run build -w @coop/shared && npm run build -w @coop/server",
+    "start:server": "npm run build:server && npm run start -w @coop/server"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

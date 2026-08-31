@@ -1,9 +1,10 @@
-# Belmo / Coolify use Nixpacks. Keep install and build separate:
-# a second `npm ci` in build fails with EBUSY on the node_modules/.cache mount.
+# Belmo free tier uses Nixpacks only (Dockerfile = Pro).
+# Leave Belmo Build/Start commands EMPTY so this file is used.
+# If Build is set to `npm ci && ...`, Coolify remounts node_modules/.cache and npm ci fails with EBUSY.
 
 [variables]
-# Need TypeScript (devDependency) at build time even if Coolify sets NODE_ENV=production.
 NPM_CONFIG_PRODUCTION = "false"
+NIXPACKS_NODE_VERSION = "22"
 
 [phases.setup]
 nixPkgs = ["nodejs_22", "npm-9_x"]
@@ -13,6 +14,7 @@ aptPkgs = ["python3", "make", "g++", "curl", "wget"]
 cmds = ["npm ci --include=dev"]
 
 [phases.build]
+# Install already ran npm ci — do NOT run npm ci again here.
 cmds = [
   "npm run build -w @coop/shared",
   "npm run build -w @coop/server",
