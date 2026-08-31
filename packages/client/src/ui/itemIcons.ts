@@ -45,6 +45,9 @@ export function itemIconUrl(id: ItemId): string {
     case "ar":
       drawAr(ctx, accent);
       break;
+    case "shotgun":
+      drawShotgun(ctx, accent);
+      break;
     case "knife":
       drawKnife(ctx, accent);
       break;
@@ -153,6 +156,18 @@ function drawAr(ctx: CanvasRenderingContext2D, color: string): void {
   ctx.fillRect(28, 22, 14, 6);
   ctx.fillStyle = "#21262d";
   ctx.fillRect(52, 25, 10, 4);
+}
+
+function drawShotgun(ctx: CanvasRenderingContext2D, color: string): void {
+  ctx.fillStyle = color;
+  ctx.fillRect(6, 26, 48, 12);
+  ctx.fillRect(48, 22, 12, 10);
+  ctx.fillRect(14, 38, 12, 14);
+  ctx.fillRect(30, 20, 16, 8);
+  ctx.fillStyle = "#5c3a1e";
+  ctx.fillRect(4, 28, 10, 8);
+  ctx.fillStyle = "#21262d";
+  ctx.fillRect(52, 24, 10, 5);
 }
 
 function drawKnife(ctx: CanvasRenderingContext2D, color: string): void {

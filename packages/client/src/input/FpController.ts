@@ -24,6 +24,7 @@ export class FpController {
   private useEdge = false;
   private jumpEdge = false;
   private interactEdge = false;
+  private pingEdge = false;
   private downed = false;
   private blocked = false;
   private selectedSlot = 0;
@@ -47,6 +48,7 @@ export class FpController {
     window.addEventListener("keyup", this.onKeyUp);
     canvas.addEventListener("click", this.requestLock);
     canvas.addEventListener("mousedown", this.onMouseDown);
+    canvas.addEventListener("auxclick", this.onAuxClick);
     document.addEventListener("pointerlockchange", this.onLockChange);
     document.addEventListener("mousemove", this.onMouseMove);
   }
@@ -56,6 +58,7 @@ export class FpController {
     window.removeEventListener("keyup", this.onKeyUp);
     this.canvas.removeEventListener("click", this.requestLock);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
+    this.canvas.removeEventListener("auxclick", this.onAuxClick);
     document.removeEventListener("pointerlockchange", this.onLockChange);
     document.removeEventListener("mousemove", this.onMouseMove);
   }
@@ -93,6 +96,13 @@ export class FpController {
   consumeInteractEdge(): boolean {
     const v = this.interactEdge;
     this.interactEdge = false;
+    return v;
+  }
+
+  /** Consume middle-mouse ping request. */
+  consumePingEdge(): boolean {
+    const v = this.pingEdge;
+    this.pingEdge = false;
     return v;
   }
 
@@ -249,6 +259,14 @@ export class FpController {
     if (e.button === 0) {
       this.useEdge = true;
     }
+    if (e.button === 1) {
+      e.preventDefault();
+      this.pingEdge = true;
+    }
+  };
+
+  private readonly onAuxClick = (e: MouseEvent) => {
+    if (e.button === 1) e.preventDefault();
   };
 
   private readonly requestLock = () => {

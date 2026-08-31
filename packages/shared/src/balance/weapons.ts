@@ -1,4 +1,12 @@
-export type WeaponId = "fists" | "knife" | "sword" | "axe" | "pistol" | "smg" | "ar";
+export type WeaponId =
+  | "fists"
+  | "knife"
+  | "sword"
+  | "axe"
+  | "pistol"
+  | "smg"
+  | "ar"
+  | "shotgun";
 
 export type WeaponDef = {
   id: WeaponId;
@@ -78,6 +86,15 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     range: 42,
     cooldown: 0.18,
     ammoCost: 1,
+    kind: "gun",
+  },
+  shotgun: {
+    id: "shotgun",
+    label: "Shotgun",
+    damage: 48,
+    range: 14,
+    cooldown: 0.85,
+    ammoCost: 2,
     kind: "gun",
   },
 };

@@ -69,6 +69,9 @@ wss.on("connection", (ws) => {
         zombies: result.room.snapshotZombies(),
         lootNodes: result.room.snapshotLootNodes(),
         storage: result.room.snapshotStorage(),
+        base: result.room.snapshotBase(),
+        invasion: result.room.snapshotInvasion(),
+        pings: result.room.snapshotPings(),
       });
       return;
     }
@@ -87,6 +90,9 @@ wss.on("connection", (ws) => {
         zombies: result.room.snapshotZombies(),
         lootNodes: result.room.snapshotLootNodes(),
         storage: result.room.snapshotStorage(),
+        base: result.room.snapshotBase(),
+        invasion: result.room.snapshotInvasion(),
+        pings: result.room.snapshotPings(),
       });
       return;
     }
@@ -108,6 +114,31 @@ wss.on("connection", (ws) => {
 
     if (msg.type === "invQuickMove") {
       rooms.handleInvQuickMove(ws, msg.from, msg.prefer, msg.containerLootId);
+      return;
+    }
+
+    if (msg.type === "setReady") {
+      rooms.handleSetReady(ws, msg.ready);
+      return;
+    }
+
+    if (msg.type === "repairWall") {
+      rooms.handleRepairWall(ws, msg.wallId);
+      return;
+    }
+
+    if (msg.type === "upgradeBase") {
+      rooms.handleUpgradeBase(ws, msg.component, msg.wallId);
+      return;
+    }
+
+    if (msg.type === "craft") {
+      rooms.handleCraft(ws, msg.recipe);
+      return;
+    }
+
+    if (msg.type === "worldPing") {
+      rooms.handleWorldPing(ws, msg.x, msg.y, msg.z);
       return;
     }
 

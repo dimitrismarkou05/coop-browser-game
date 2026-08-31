@@ -1,8 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
+  BASE,
+  BASE_LAYOUT,
   COMBAT,
   INV,
+  INVASION,
   ITEMS,
   LOOT_SPOTS,
   M4_AMBIENT,
@@ -14,6 +17,7 @@ import {
   STORAGE_POS,
   SURVIVAL,
   TICK_MS,
+  WALL_IDS,
   WEAPONS,
   ZOMBIE_DEFS,
   applyPlayerMovement,
@@ -27,27 +31,44 @@ import {
   emptySlots,
   eyePosition,
   firstWallHit,
+  generatorTierDef,
   getSolidAabbs,
   inMeleeCone,
+  invasionSpawnPoint,
   lookDirection,
   moveSlots,
   moveToward,
+  prepDurationSec,
   quickMoveInto,
   randomPointInZombiePen,
   raycastCapsuleXZ,
   rollLootStacks,
   startingHotbar,
   startingInventory,
+  storageTierDef,
+  wallAabb,
+  wallTierDef,
+  warningDurationSec,
+  waveSpawns,
+  workbenchTierDef,
+  type Aabb,
+  type BaseSnapshot,
   type GameEvent,
+  type InvasionPhase,
+  type InvasionSnapshot,
+  type ItemId,
   type LootNodeSnapshot,
   type PlayerSnapshot,
   type ServerMessage,
   type Slot,
   type SlotRef,
+  type WallId,
   type WeaponId,
+  type WorldPingSnapshot,
   type ZombieSnapshot,
   type ZombieTypeId,
 } from "@coop/shared";
+import { loadWorld, saveWorld, type WorldCheckpoint } from "../db/worldStore.js";
 
 export type RoomPlayer = {
   id: string;
@@ -79,6 +100,7 @@ export type RoomPlayer = {
   sprinting: boolean;
   reviveTargetId: string | null;
   reviveProgress: number;
+  ready: boolean;
   ws: WebSocket;
 };
 
@@ -104,6 +126,31 @@ type RoomLootNode = {
   table: (typeof LOOT_SPOTS)[number]["table"];
 };
 
+type RoomWall = {
+  id: WallId;
+  hp: number;
+  tier: number;
+};
+
+type RoomPing = {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  by: string;
+  color: number;
+  ttl: number;
+};
+
+const SAVE_INTERVAL_SEC = 15;
+const PING_TTL_SEC = 8;
+const MAX_WORLD_PINGS = 8;
+/** Prefer players over walls unless a wall is this much closer. */
+const WALL_PREFER_SLACK = 3;
+const WALL_HIT_BRUISER = 12;
+const WALL_HIT_OTHER = 4;
+const CORE_CHIP_DAMAGE = 5;
+
 function send(ws: WebSocket, message: ServerMessage): void {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(message));
@@ -126,24 +173,62 @@ function isWeaponId(id: string): id is WeaponId {
 
 let nextPlayerSeq = 1;
 let nextZombieSeq = 1;
+let nextPingSeq = 1;
 
 export class Room {
   readonly code: string;
   readonly players = new Map<string, RoomPlayer>();
   readonly zombies = new Map<string, RoomZombie>();
   readonly lootNodes = new Map<string, RoomLootNode>();
-  storage: Slot[] = emptySlots(INV.storageSize);
+  storage: Slot[] = emptySlots(storageTierDef(1).slots);
+
+  coreHp: number = BASE.coreMaxHp;
+  readonly walls = new Map<WallId, RoomWall>();
+  storageTier = 1;
+  workbenchTier = 1;
+  generatorTier = 1;
+  unlocks: string[] = [];
+
+  invasionIndex = 0;
+  phase: InvasionPhase = "prep";
+  /** Seconds remaining in current phase (prep / warning / resolve) or cleanup during waves. */
+  phaseTimer = prepDurationSec(0);
+  waveIndex = 0;
+  wavesTotal = INVASION.wavesPerInvasion;
+  /** Cleanup grace after the last wave is spawned; null until then. */
+  private cleanupTimer: number | null = null;
+
+  worldPings: RoomPing[] = [];
+  solids: Aabb[] = [];
+  private saveAcc = 0;
+
   private tick = 0;
   private respawnAcc = 0;
-  private readonly solids = getSolidAabbs();
   private readonly timer: ReturnType<typeof setInterval>;
   private onEmpty: ((code: string) => void) | null = null;
   private tickEvents: GameEvent[] = [];
 
-  constructor(code?: string) {
-    this.code = code ?? makeCode();
+  constructor(code?: string, checkpoint?: WorldCheckpoint | null) {
+    this.code = (code ?? makeCode()).trim().toUpperCase();
+
+    if (checkpoint) {
+      this.restoreFromCheckpoint(checkpoint);
+    } else {
+      this.initDefaultBase();
+    }
+
     this.seedLootNodes();
+    if (checkpoint?.loot) {
+      for (const [id, data] of Object.entries(checkpoint.loot)) {
+        const node = this.lootNodes.get(id);
+        if (!node) continue;
+        node.opened = Boolean(data.opened);
+        node.slots = cloneSlots(data.slots ?? []);
+      }
+    }
+
     this.seedAmbientWalkers(M4_AMBIENT.count);
+    this.rebuildSolids();
     this.timer = setInterval(() => this.step(), TICK_MS);
   }
 
@@ -153,6 +238,294 @@ export class Room {
 
   get size(): number {
     return this.players.size;
+  }
+
+  private initDefaultBase(): void {
+    this.coreHp = BASE.coreMaxHp;
+    this.walls.clear();
+    for (const id of WALL_IDS) {
+      const def = wallTierDef(1);
+      this.walls.set(id, { id, hp: def.maxHp, tier: 1 });
+    }
+    this.storageTier = 1;
+    this.workbenchTier = 1;
+    this.generatorTier = 1;
+    this.unlocks = [];
+    this.storage = emptySlots(storageTierDef(1).slots);
+    this.invasionIndex = 0;
+    this.phase = "prep";
+    this.phaseTimer = prepDurationSec(0);
+    this.waveIndex = 0;
+    this.wavesTotal = INVASION.wavesPerInvasion;
+    this.cleanupTimer = null;
+  }
+
+  private restoreFromCheckpoint(cp: WorldCheckpoint): void {
+    this.coreHp = cp.coreHp;
+    this.walls.clear();
+    for (const id of WALL_IDS) {
+      const saved = cp.walls.find((w) => w.id === id);
+      const tier = saved?.tier ?? 1;
+      const def = wallTierDef(tier);
+      const hp = saved?.hp ?? def.maxHp;
+      this.walls.set(id, { id, hp, tier });
+    }
+    this.storageTier = cp.storageTier;
+    this.workbenchTier = cp.workbenchTier;
+    this.generatorTier = cp.generatorTier;
+    this.unlocks = [...cp.unlocks];
+    this.syncWorkbenchUnlocks(false);
+    this.storage = cloneSlots(cp.storage);
+    this.resizeStorage(storageTierDef(this.storageTier).slots);
+    this.invasionIndex = cp.invasionIndex;
+    // Never resume mid-wave — always land in full prep.
+    this.phase = "prep";
+    this.phaseTimer = prepDurationSec(this.invasionIndex);
+    this.waveIndex = 0;
+    this.wavesTotal = INVASION.wavesPerInvasion;
+    this.cleanupTimer = null;
+  }
+
+  rebuildSolids(): void {
+    const wallBoxes = [...this.walls.values()]
+      .filter((w) => w.hp > 0)
+      .map((w) => wallAabb(w.id));
+    this.solids = [...getSolidAabbs(), ...wallBoxes];
+  }
+
+  snapshotBase(): BaseSnapshot {
+    return {
+      coreHp: this.coreHp,
+      coreMaxHp: BASE.coreMaxHp,
+      walls: WALL_IDS.map((id) => {
+        const w = this.walls.get(id)!;
+        const maxHp = wallTierDef(w.tier).maxHp;
+        return {
+          id,
+          hp: w.hp,
+          maxHp,
+          tier: w.tier,
+          broken: w.hp <= 0,
+        };
+      }),
+      storageTier: this.storageTier,
+      workbenchTier: this.workbenchTier,
+      generatorTier: this.generatorTier,
+      unlocks: [...this.unlocks],
+    };
+  }
+
+  snapshotInvasion(): InvasionSnapshot {
+    let phaseEndsIn = this.phaseTimer;
+    if (this.phase === "waves" && this.cleanupTimer !== null) {
+      phaseEndsIn = this.cleanupTimer;
+    }
+    let readyCount = 0;
+    for (const p of this.players.values()) {
+      if (p.ready) readyCount += 1;
+    }
+    return {
+      phase: this.phase,
+      invasionIndex: this.invasionIndex,
+      phaseEndsIn,
+      waveIndex: this.waveIndex,
+      wavesTotal: this.wavesTotal,
+      readyCount,
+      playerCount: this.players.size,
+    };
+  }
+
+  snapshotPings(): WorldPingSnapshot[] {
+    return this.worldPings.map((p) => ({
+      id: p.id,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      by: p.by,
+      color: p.color,
+      ttl: p.ttl,
+    }));
+  }
+
+  setReady(playerId: string, ready: boolean): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+    player.ready = ready;
+  }
+
+  repairWall(playerId: string, wallId: WallId): void {
+    const player = this.players.get(playerId);
+    const wall = this.walls.get(wallId);
+    if (!player || !wall || player.downed) return;
+    if (!this.nearWall(player, wallId)) return;
+
+    const def = wallTierDef(wall.tier);
+    const missing = def.maxHp - wall.hp;
+    if (missing <= 0) return;
+
+    const woodNeeded = Math.max(1, Math.ceil((missing / def.maxHp) * def.repairWoodFull));
+    if (!this.consumeFromPlayer(player, "wood", woodNeeded)) return;
+
+    wall.hp = def.maxHp;
+    if (wall.hp > 0) this.rebuildSolids();
+    this.tickEvents.push({ kind: "repair", playerId, wallId, hp: wall.hp });
+  }
+
+  upgradeBase(
+    playerId: string,
+    component: "wall" | "storage" | "workbench" | "generator",
+    wallId?: WallId,
+  ): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+
+    if (component === "wall") {
+      if (!wallId || !this.walls.has(wallId)) return;
+      if (!this.nearWall(player, wallId)) return;
+      const wall = this.walls.get(wallId)!;
+      const nextTier = wall.tier + 1;
+      if (nextTier > 3) return;
+      const next = wallTierDef(nextTier);
+      const scrapHave =
+        countItem(player.hotbar, "scrap") + countItem(player.inventory, "scrap");
+      const woodHave =
+        countItem(player.hotbar, "wood") + countItem(player.inventory, "wood");
+      if (scrapHave < next.upgradeScrap || woodHave < next.upgradeWood) return;
+      this.consumeFromPlayer(player, "scrap", next.upgradeScrap);
+      this.consumeFromPlayer(player, "wood", next.upgradeWood);
+      wall.tier = nextTier;
+      wall.hp = next.maxHp;
+      this.rebuildSolids();
+      this.tickEvents.push({ kind: "upgrade", playerId, component: "wall", tier: nextTier });
+      return;
+    }
+
+    if (component === "storage") {
+      if (distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) > BASE.interactRange) return;
+      const nextTier = this.storageTier + 1;
+      if (nextTier > 3) return;
+      const next = storageTierDef(nextTier);
+      const scrapHave =
+        countItem(player.hotbar, "scrap") + countItem(player.inventory, "scrap");
+      const woodHave =
+        countItem(player.hotbar, "wood") + countItem(player.inventory, "wood");
+      if (scrapHave < next.upgradeScrap || woodHave < next.upgradeWood) return;
+      this.consumeFromPlayer(player, "scrap", next.upgradeScrap);
+      this.consumeFromPlayer(player, "wood", next.upgradeWood);
+      this.storageTier = nextTier;
+      this.resizeStorage(next.slots);
+      this.tickEvents.push({ kind: "upgrade", playerId, component: "storage", tier: nextTier });
+      return;
+    }
+
+    if (component === "workbench") {
+      const wb = BASE_LAYOUT.workbench;
+      if (distXZ(player.x, player.z, wb.x, wb.z) > BASE.interactRange) return;
+      const nextTier = this.workbenchTier + 1;
+      if (nextTier > 3) return;
+      const next = workbenchTierDef(nextTier);
+      if (!this.consumeFromPlayer(player, "scrap", next.upgradeScrap)) return;
+      this.workbenchTier = nextTier;
+      for (const unlock of next.unlocks) {
+        if (!this.unlocks.includes(unlock)) {
+          this.unlocks.push(unlock);
+          this.tickEvents.push({ kind: "unlock", unlock });
+        }
+      }
+      this.tickEvents.push({ kind: "upgrade", playerId, component: "workbench", tier: nextTier });
+      return;
+    }
+
+    if (component === "generator") {
+      const gen = BASE_LAYOUT.generator;
+      if (distXZ(player.x, player.z, gen.x, gen.z) > BASE.interactRange) return;
+      const nextTier = this.generatorTier + 1;
+      if (nextTier > 3) return;
+      const next = generatorTierDef(nextTier);
+      if (!this.consumeFromPlayer(player, "scrap", next.upgradeScrap)) return;
+      this.generatorTier = nextTier;
+      this.tickEvents.push({ kind: "upgrade", playerId, component: "generator", tier: nextTier });
+    }
+  }
+
+  craft(playerId: string, recipe: "shotgun"): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+    if (recipe !== "shotgun") return;
+    if (!this.unlocks.includes("shotgun")) return;
+
+    const wb = BASE_LAYOUT.workbench;
+    if (distXZ(player.x, player.z, wb.x, wb.z) > BASE.interactRange) return;
+
+    const scrapHave =
+      countItem(player.hotbar, "scrap") + countItem(player.inventory, "scrap");
+    const woodHave =
+      countItem(player.hotbar, "wood") + countItem(player.inventory, "wood");
+    if (scrapHave < BASE.shotgunCraftScrap || woodHave < BASE.shotgunCraftWood) return;
+
+    // Ensure space for the shotgun before consuming.
+    const probeLeft = this.depositIntoBags(
+      [cloneSlots(player.hotbar), cloneSlots(player.inventory)],
+      "shotgun",
+      1,
+    );
+    if (probeLeft > 0) return;
+
+    this.consumeFromPlayer(player, "scrap", BASE.shotgunCraftScrap);
+    this.consumeFromPlayer(player, "wood", BASE.shotgunCraftWood);
+    this.giveToPlayer(player, "shotgun", 1);
+    this.tickEvents.push({ kind: "craft", playerId, item: "shotgun" });
+  }
+
+  addWorldPing(playerId: string, x: number, y: number, z: number): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+
+    while (this.worldPings.length >= MAX_WORLD_PINGS) {
+      this.worldPings.shift();
+    }
+    const id = `ping${nextPingSeq++}`;
+    this.worldPings.push({
+      id,
+      x,
+      y,
+      z,
+      by: playerId,
+      color: player.color,
+      ttl: PING_TTL_SEC,
+    });
+    this.tickEvents.push({ kind: "ping", pingId: id, x, y, z, by: playerId });
+  }
+
+  toCheckpoint(): WorldCheckpoint {
+    const loot: WorldCheckpoint["loot"] = {};
+    for (const node of this.lootNodes.values()) {
+      loot[node.id] = { opened: node.opened, slots: cloneSlots(node.slots) };
+    }
+    return {
+      code: this.code,
+      invasionIndex: this.invasionIndex,
+      phase: this.phase,
+      phaseEndsIn: this.phaseTimer,
+      waveIndex: this.waveIndex,
+      coreHp: this.coreHp,
+      walls: WALL_IDS.map((id) => {
+        const w = this.walls.get(id)!;
+        return { id, hp: w.hp, tier: w.tier };
+      }),
+      storageTier: this.storageTier,
+      workbenchTier: this.workbenchTier,
+      generatorTier: this.generatorTier,
+      unlocks: [...this.unlocks],
+      storage: cloneSlots(this.storage),
+      loot,
+      updatedAt: Date.now(),
+    };
+  }
+
+  requestSave(): void {
+    saveWorld(this.toCheckpoint());
+    this.saveAcc = 0;
   }
 
   addPlayer(ws: WebSocket, name: string): RoomPlayer | null {
@@ -190,6 +563,7 @@ export class Room {
       sprinting: false,
       reviveTargetId: null,
       reviveProgress: 0,
+      ready: false,
       ws,
     };
     this.players.set(id, player);
@@ -200,6 +574,7 @@ export class Room {
     this.players.delete(playerId);
     this.broadcast({ type: "playerLeft", playerId });
     if (this.players.size === 0) {
+      this.requestSave();
       this.dispose();
       this.onEmpty?.(this.code);
     }
@@ -388,11 +763,38 @@ export class Room {
       return { ok: true, message: `Killed all zombies (${n})` };
     }
 
+    if (cmd === "invasion" && parts[1]?.toLowerCase() === "start") {
+      this.enterWarning();
+      return { ok: true, message: "Forced invasion warning" };
+    }
+
+    if (cmd === "invasion" && parts[1]?.toLowerCase() === "skip") {
+      this.resolveInvasionWin();
+      return { ok: true, message: "Forced invasion win / resolve" };
+    }
+
+    if (cmd === "give" && parts[1] && parts[2]) {
+      const itemRaw = parts[1].toLowerCase();
+      if (itemRaw !== "wood" && itemRaw !== "scrap") {
+        return { ok: false, message: "Usage: give wood|scrap <n>" };
+      }
+      const n = Math.max(0, Math.floor(Number(parts[2])));
+      if (!Number.isFinite(n) || n <= 0) {
+        return { ok: false, message: "Usage: give wood|scrap <n>" };
+      }
+      const left = this.giveToPlayer(player, itemRaw, n);
+      const given = n - left;
+      return {
+        ok: given > 0,
+        message: given > 0 ? `Gave ${given} ${itemRaw}` : "Inventory full",
+      };
+    }
+
     if (cmd === "help") {
       return {
         ok: true,
         message:
-          "spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies",
+          "spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies | invasion start | invasion skip | give wood|scrap <n>",
       };
     }
 
@@ -428,6 +830,7 @@ export class Room {
       bleedout: p.bleedout,
       reviveProgress: Math.min(1, p.reviveProgress / COMBAT.reviveDuration),
       beingRevived: beingRevived.has(p.id),
+      ready: p.ready,
     }));
   }
 
@@ -554,6 +957,24 @@ export class Room {
     return best;
   }
 
+  private nearestIntactWall(
+    x: number,
+    z: number,
+  ): { wall: RoomWall; dist: number } | null {
+    let best: RoomWall | null = null;
+    let bestDist = Infinity;
+    for (const wall of this.walls.values()) {
+      if (wall.hp <= 0) continue;
+      const layout = BASE_LAYOUT.walls[wall.id];
+      const d = distXZ(x, z, layout.x, layout.z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = wall;
+      }
+    }
+    return best ? { wall: best, dist: bestDist } : null;
+  }
+
   private hurtPlayer(player: RoomPlayer, damage: number): void {
     if (player.downed || player.iFrames > 0) return;
     player.hp = Math.max(0, player.hp - damage);
@@ -573,6 +994,7 @@ export class Room {
     player.useQueued = false;
     player.jumpQueued = false;
     player.sprinting = false;
+    player.ready = false;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
     this.tickEvents.push({ kind: "down", playerId: player.id });
@@ -821,6 +1243,414 @@ export class Room {
     return false;
   }
 
+  private nearWall(player: RoomPlayer, wallId: WallId): boolean {
+    const layout = BASE_LAYOUT.walls[wallId];
+    return distXZ(player.x, player.z, layout.x, layout.z) <= BASE.interactRange + 2;
+  }
+
+  private consumeFromPlayer(player: RoomPlayer, id: ItemId, amount: number): boolean {
+    if (amount <= 0) return true;
+    const have = countItem(player.hotbar, id) + countItem(player.inventory, id);
+    if (have < amount) return false;
+    let need = amount;
+    need = consumeItem(player.hotbar, id, need);
+    if (need > 0) consumeItem(player.inventory, id, need);
+    return true;
+  }
+
+  /** Deposit into hotbar then inventory. Returns leftover count. */
+  private giveToPlayer(player: RoomPlayer, id: ItemId, count: number): number {
+    return this.depositIntoBags([player.hotbar, player.inventory], id, count);
+  }
+
+  private depositIntoBags(bags: Slot[][], id: ItemId, count: number): number {
+    let left = count;
+    const max = ITEMS[id].maxStack;
+    for (const slots of bags) {
+      if (left <= 0) break;
+      for (let i = 0; i < slots.length && left > 0; i++) {
+        const s = slots[i];
+        if (!s || s.id !== id) continue;
+        const space = max - s.count;
+        if (space <= 0) continue;
+        const take = Math.min(space, left);
+        s.count += take;
+        left -= take;
+      }
+      for (let i = 0; i < slots.length && left > 0; i++) {
+        if (slots[i]) continue;
+        const take = Math.min(max, left);
+        slots[i] = { id, count: take };
+        left -= take;
+      }
+    }
+    return left;
+  }
+
+  private depositIntoStorage(id: ItemId, count: number): number {
+    return this.depositIntoBags([this.storage], id, count);
+  }
+
+  private resizeStorage(slots: number): void {
+    if (slots > this.storage.length) {
+      this.storage.push(...emptySlots(slots - this.storage.length));
+      return;
+    }
+    if (slots < this.storage.length) {
+      while (this.storage.length > slots && this.storage[this.storage.length - 1] === null) {
+        this.storage.pop();
+      }
+    }
+  }
+
+  private syncWorkbenchUnlocks(emitEvents: boolean): void {
+    for (let t = 1; t <= this.workbenchTier; t++) {
+      for (const unlock of workbenchTierDef(t).unlocks) {
+        if (!this.unlocks.includes(unlock)) {
+          this.unlocks.push(unlock);
+          if (emitEvents) this.tickEvents.push({ kind: "unlock", unlock });
+        }
+      }
+    }
+  }
+
+  private clearReadyFlags(): void {
+    for (const p of this.players.values()) p.ready = false;
+  }
+
+  private wipeNonPennedZombies(): void {
+    for (const [id, z] of this.zombies) {
+      if (!z.penned) this.zombies.delete(id);
+    }
+  }
+
+  private enterWarning(): void {
+    this.phase = "warning";
+    const bonus = generatorTierDef(this.generatorTier).warningBonusSec;
+    this.phaseTimer = warningDurationSec(this.generatorTier, bonus);
+    this.cleanupTimer = null;
+    this.clearReadyFlags();
+    this.tickEvents.push({
+      kind: "phaseChange",
+      phase: "warning",
+      invasionIndex: this.invasionIndex,
+    });
+  }
+
+  private enterWaves(): void {
+    this.phase = "waves";
+    this.wavesTotal = INVASION.wavesPerInvasion;
+    this.waveIndex = 0;
+    this.cleanupTimer = null;
+    this.phaseTimer = 0;
+    this.spawnWave(0);
+    this.tickEvents.push({
+      kind: "waveStart",
+      waveIndex: 0,
+      invasionIndex: this.invasionIndex,
+    });
+    this.tickEvents.push({
+      kind: "phaseChange",
+      phase: "waves",
+      invasionIndex: this.invasionIndex,
+    });
+  }
+
+  private spawnWave(w: number): void {
+    this.waveIndex = w;
+    const spawns = waveSpawns(this.invasionIndex, w);
+    let slot = 0;
+    for (const spawn of spawns) {
+      for (let i = 0; i < spawn.count; i++) {
+        const pos = invasionSpawnPoint(slot++);
+        this.spawnZombieAt(spawn.kind, pos.x, pos.z, false);
+      }
+    }
+    if (w >= this.wavesTotal - 1) {
+      this.cleanupTimer = INVASION.cleanupSec;
+    }
+  }
+
+  private countInvasionZombies(): number {
+    let n = 0;
+    for (const z of this.zombies.values()) {
+      if (!z.penned) n += 1;
+    }
+    return n;
+  }
+
+  private resolveInvasionWin(): void {
+    this.wipeNonPennedZombies();
+    const scrap =
+      INVASION.rewardScrap + this.invasionIndex * INVASION.rewardScrapPerIndex;
+    const ammo = INVASION.rewardAmmo;
+    this.depositIntoStorage("scrap", scrap);
+    this.depositIntoStorage("ammo", ammo);
+
+    this.invasionIndex += 1;
+    this.syncWorkbenchUnlocks(true);
+
+    this.phase = "resolve";
+    this.phaseTimer = INVASION.resolveSec;
+    this.cleanupTimer = null;
+    this.waveIndex = 0;
+    this.clearReadyFlags();
+
+    this.tickEvents.push({
+      kind: "invasionWon",
+      invasionIndex: this.invasionIndex - 1,
+      scrap,
+      ammo,
+    });
+    this.tickEvents.push({
+      kind: "phaseChange",
+      phase: "resolve",
+      invasionIndex: this.invasionIndex,
+    });
+    this.requestSave();
+  }
+
+  private invasionLost(): void {
+    this.wipeNonPennedZombies();
+
+    for (const wall of this.walls.values()) {
+      const maxHp = wallTierDef(wall.tier).maxHp;
+      wall.hp = Math.max(0, wall.hp - maxHp * INVASION.wipeWallDamageFrac);
+    }
+    this.coreHp = BASE.coreMaxHp * INVASION.wipeCoreRestoreFrac;
+    this.rebuildSolids();
+
+    for (const player of this.players.values()) {
+      this.wipePlayerCarryKeepPistol(player);
+      this.respawnPlayer(player);
+      player.ready = false;
+    }
+
+    this.phase = "prep";
+    this.phaseTimer = prepDurationSec(this.invasionIndex);
+    this.waveIndex = 0;
+    this.cleanupTimer = null;
+
+    this.tickEvents.push({ kind: "invasionLost", invasionIndex: this.invasionIndex });
+    this.tickEvents.push({
+      kind: "phaseChange",
+      phase: "prep",
+      invasionIndex: this.invasionIndex,
+    });
+  }
+
+  private wipePlayerCarryKeepPistol(player: RoomPlayer): void {
+    let keepPistol = false;
+    for (const bag of [player.hotbar, player.inventory]) {
+      for (let i = 0; i < bag.length; i++) {
+        const s = bag[i];
+        if (s?.id === "pistol" && !keepPistol) {
+          keepPistol = true;
+          bag[i] = { id: "pistol", count: 1 };
+        } else {
+          bag[i] = null;
+        }
+      }
+    }
+    if (keepPistol && !player.hotbar.some((s) => s?.id === "pistol")) {
+      // Ensure pistol sits on hotbar slot 0 if it was only in inv.
+      player.hotbar[0] = { id: "pistol", count: 1 };
+      for (let i = 0; i < player.inventory.length; i++) {
+        if (player.inventory[i]?.id === "pistol") player.inventory[i] = null;
+      }
+    }
+  }
+
+  private damageWall(wall: RoomWall, amount: number): void {
+    if (wall.hp <= 0) return;
+    wall.hp = Math.max(0, wall.hp - amount);
+    if (wall.hp <= 0) {
+      this.rebuildSolids();
+      this.tickEvents.push({ kind: "wallBreak", wallId: wall.id });
+    }
+  }
+
+  private updateInvasion(dt: number): void {
+    if (this.phase === "prep") {
+      this.phaseTimer -= dt;
+      const allReady =
+        this.players.size >= 1 && [...this.players.values()].every((p) => p.ready);
+      if (allReady || this.phaseTimer <= 0) {
+        this.enterWarning();
+      }
+      return;
+    }
+
+    if (this.phase === "warning") {
+      this.phaseTimer -= dt;
+      if (this.coreHp <= 0) {
+        this.invasionLost();
+        return;
+      }
+      if (this.phaseTimer <= 0) {
+        this.enterWaves();
+      }
+      return;
+    }
+
+    if (this.phase === "waves") {
+      if (this.cleanupTimer !== null) {
+        this.cleanupTimer -= dt;
+      }
+      if (this.coreHp <= 0) {
+        this.invasionLost();
+        return;
+      }
+
+      const left = this.countInvasionZombies();
+      const lastWave = this.waveIndex >= this.wavesTotal - 1;
+
+      if (left === 0) {
+        if (this.waveIndex + 1 < this.wavesTotal) {
+          const next = this.waveIndex + 1;
+          this.spawnWave(next);
+          this.tickEvents.push({
+            kind: "waveStart",
+            waveIndex: next,
+            invasionIndex: this.invasionIndex,
+          });
+        } else {
+          this.resolveInvasionWin();
+        }
+        return;
+      }
+
+      if (lastWave && this.cleanupTimer !== null && this.cleanupTimer <= 0) {
+        this.resolveInvasionWin();
+      }
+      return;
+    }
+
+    if (this.phase === "resolve") {
+      this.phaseTimer -= dt;
+      if (this.phaseTimer <= 0) {
+        this.phase = "prep";
+        this.phaseTimer = prepDurationSec(this.invasionIndex);
+        this.cleanupTimer = null;
+        this.clearReadyFlags();
+        this.tickEvents.push({
+          kind: "phaseChange",
+          phase: "prep",
+          invasionIndex: this.invasionIndex,
+        });
+      }
+    }
+  }
+
+  private updateZombieAi(zombie: RoomZombie, dt: number): void {
+    const def = ZOMBIE_DEFS[zombie.kind];
+    if (zombie.attackCd > 0) zombie.attackCd = Math.max(0, zombie.attackCd - dt);
+
+    const siege =
+      !zombie.penned && (this.phase === "waves" || this.phase === "warning");
+
+    if (siege) {
+      const target = this.nearestPlayer(zombie.x, zombie.z, def.aggroRange);
+      const wallHit = this.nearestIntactWall(zombie.x, zombie.z);
+      const playerDist = target
+        ? distXZ(zombie.x, zombie.z, target.x, target.z)
+        : Infinity;
+      const wallDist = wallHit?.dist ?? Infinity;
+
+      const preferWall =
+        wallHit !== null &&
+        (target === null || wallDist + WALL_PREFER_SLACK < playerDist);
+
+      if (!preferWall && target) {
+        if (playerDist > def.attackRange * 0.85) {
+          const moved = moveToward(
+            zombie.x,
+            zombie.z,
+            target.x,
+            target.z,
+            def.speed,
+            dt,
+            def.radius,
+            this.solids,
+          );
+          zombie.x = moved.x;
+          zombie.z = moved.z;
+          zombie.yaw = moved.yaw;
+        } else {
+          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
+          if (zombie.attackCd <= 0 && !target.downed) {
+            this.hurtPlayer(target, def.damage);
+            zombie.attackCd = def.attackCooldown;
+          }
+        }
+      } else if (wallHit) {
+        const layout = BASE_LAYOUT.walls[wallHit.wall.id];
+        const attackRange = def.attackRange + Math.max(layout.sx, layout.sz) * 0.35;
+        if (wallDist > attackRange * 0.9) {
+          const moved = moveToward(
+            zombie.x,
+            zombie.z,
+            layout.x,
+            layout.z,
+            def.speed,
+            dt,
+            def.radius,
+            this.solids,
+          );
+          zombie.x = moved.x;
+          zombie.z = moved.z;
+          zombie.yaw = moved.yaw;
+        } else {
+          zombie.yaw = Math.atan2(layout.x - zombie.x, -(layout.z - zombie.z));
+          if (zombie.attackCd <= 0) {
+            const dmg = zombie.kind === "bruiser" ? WALL_HIT_BRUISER : WALL_HIT_OTHER;
+            this.damageWall(wallHit.wall, dmg);
+            zombie.attackCd = def.attackCooldown;
+          }
+        }
+      }
+
+      const core = BASE_LAYOUT.core;
+      const coreDist = distXZ(zombie.x, zombie.z, core.x, core.z);
+      if (coreDist < core.radius + 1.5 && zombie.attackCd <= 0) {
+        this.coreHp = Math.max(0, this.coreHp - CORE_CHIP_DAMAGE);
+        zombie.attackCd = def.attackCooldown;
+      }
+    } else {
+      const target = this.nearestPlayer(zombie.x, zombie.z, def.aggroRange);
+      if (target) {
+        const dist = distXZ(zombie.x, zombie.z, target.x, target.z);
+        if (dist > def.attackRange * 0.85) {
+          const moved = moveToward(
+            zombie.x,
+            zombie.z,
+            target.x,
+            target.z,
+            def.speed,
+            dt,
+            def.radius,
+            this.solids,
+          );
+          zombie.x = moved.x;
+          zombie.z = moved.z;
+          zombie.yaw = moved.yaw;
+        } else {
+          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
+          if (zombie.attackCd <= 0 && !target.downed) {
+            this.hurtPlayer(target, def.damage);
+            zombie.attackCd = def.attackCooldown;
+          }
+        }
+      }
+    }
+
+    if (zombie.penned) {
+      const c = clampToZombiePen(zombie.x, zombie.z);
+      zombie.x = c.x;
+      zombie.z = c.z;
+    }
+  }
+
   private step(): void {
     const dt = TICK_MS / 1000;
     this.tick += 1;
@@ -882,40 +1712,7 @@ export class Room {
     }
 
     for (const zombie of this.zombies.values()) {
-      const def = ZOMBIE_DEFS[zombie.kind];
-      if (zombie.attackCd > 0) zombie.attackCd = Math.max(0, zombie.attackCd - dt);
-
-      const target = this.nearestPlayer(zombie.x, zombie.z, def.aggroRange);
-      if (target) {
-        const dist = distXZ(zombie.x, zombie.z, target.x, target.z);
-        if (dist > def.attackRange * 0.85) {
-          const moved = moveToward(
-            zombie.x,
-            zombie.z,
-            target.x,
-            target.z,
-            def.speed,
-            dt,
-            def.radius,
-            this.solids,
-          );
-          zombie.x = moved.x;
-          zombie.z = moved.z;
-          zombie.yaw = moved.yaw;
-        } else {
-          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
-          if (zombie.attackCd <= 0 && !target.downed) {
-            this.hurtPlayer(target, def.damage);
-            zombie.attackCd = def.attackCooldown;
-          }
-        }
-      }
-
-      if (zombie.penned) {
-        const c = clampToZombiePen(zombie.x, zombie.z);
-        zombie.x = c.x;
-        zombie.z = c.z;
-      }
+      this.updateZombieAi(zombie, dt);
     }
 
     const pennedCount = [...this.zombies.values()].filter((z) => z.penned).length;
@@ -930,10 +1727,28 @@ export class Room {
       this.respawnAcc = 0;
     }
 
+    this.updateInvasion(dt);
+
+    // Ping TTL
+    for (const ping of this.worldPings) {
+      ping.ttl -= dt;
+    }
+    this.worldPings = this.worldPings.filter((p) => p.ttl > 0);
+
+    if (this.players.size > 0) {
+      this.saveAcc += dt;
+      if (this.saveAcc >= SAVE_INTERVAL_SEC) {
+        this.requestSave();
+      }
+    }
+
     const players = this.snapshotPlayers();
     const zombies = this.snapshotZombies();
     const lootNodes = this.snapshotLootNodes();
     const storage = this.snapshotStorage();
+    const base = this.snapshotBase();
+    const invasion = this.snapshotInvasion();
+    const pings = this.snapshotPings();
     const events = this.tickEvents.length ? this.tickEvents : undefined;
     for (const player of this.players.values()) {
       send(player.ws, {
@@ -944,6 +1759,9 @@ export class Room {
         zombies,
         lootNodes,
         storage,
+        base,
+        invasion,
+        pings,
         events,
       });
     }
@@ -962,7 +1780,10 @@ export class RoomManager {
     do {
       room = new Room();
       attempts += 1;
-    } while (this.rooms.has(room.code) && attempts < 10);
+    } while (
+      (this.rooms.has(room.code) || loadWorld(room.code) !== null) &&
+      attempts < 20
+    );
 
     room.setEmptyHandler((code) => this.rooms.delete(code));
     const player = room.addPlayer(ws, name);
@@ -980,8 +1801,15 @@ export class RoomManager {
   ): { room: Room; player: RoomPlayer } | { error: string } {
     if (this.bySocket.has(ws)) return { error: "Already in a room" };
 
-    const room = this.rooms.get(code.trim().toUpperCase());
-    if (!room) return { error: "Room not found" };
+    const key = code.trim().toUpperCase();
+    let room = this.rooms.get(key);
+    if (!room) {
+      const checkpoint = loadWorld(key);
+      if (!checkpoint) return { error: "Room not found" };
+      room = new Room(key, checkpoint);
+      room.setEmptyHandler((c) => this.rooms.delete(c));
+      this.rooms.set(room.code, room);
+    }
 
     const player = room.addPlayer(ws, name);
     if (!player) return { error: "Room is full (max 4)" };
@@ -1031,6 +1859,40 @@ export class RoomManager {
     const binding = this.bySocket.get(ws);
     if (!binding) return;
     binding.room.invQuickMove(binding.playerId, from, prefer, containerLootId);
+  }
+
+  handleSetReady(ws: WebSocket, ready: boolean): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.setReady(binding.playerId, ready);
+  }
+
+  handleRepairWall(ws: WebSocket, wallId: WallId): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.repairWall(binding.playerId, wallId);
+  }
+
+  handleUpgradeBase(
+    ws: WebSocket,
+    component: "wall" | "storage" | "workbench" | "generator",
+    wallId?: WallId,
+  ): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.upgradeBase(binding.playerId, component, wallId);
+  }
+
+  handleCraft(ws: WebSocket, recipe: "shotgun"): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.craft(binding.playerId, recipe);
+  }
+
+  handleWorldPing(ws: WebSocket, x: number, y: number, z: number): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.addWorldPing(binding.playerId, x, y, z);
   }
 
   handleDevCommand(ws: WebSocket, line: string): void {

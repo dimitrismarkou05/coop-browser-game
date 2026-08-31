@@ -1,6 +1,8 @@
 /** Shared client ↔ server message types. */
 
 import type { ItemStack, Slot, SlotBag } from "./balance/loot.js";
+import type { WallId } from "./balance/baseUpgrades.js";
+import type { InvasionPhase } from "./balance/invasions.js";
 import type { ZombieTypeId } from "./balance/zombies.js";
 
 export type PlayerSnapshot = {
@@ -27,6 +29,7 @@ export type PlayerSnapshot = {
   reviveProgress: number;
   /** True if someone is currently reviving this (downed) player. */
   beingRevived: boolean;
+  ready: boolean;
 };
 
 export type ZombieSnapshot = {
@@ -50,6 +53,46 @@ export type LootNodeSnapshot = {
   slots: Slot[];
 };
 
+export type WallSnapshot = {
+  id: WallId;
+  hp: number;
+  maxHp: number;
+  tier: number;
+  broken: boolean;
+};
+
+export type BaseSnapshot = {
+  coreHp: number;
+  coreMaxHp: number;
+  walls: WallSnapshot[];
+  storageTier: number;
+  workbenchTier: number;
+  generatorTier: number;
+  unlocks: string[];
+};
+
+export type InvasionSnapshot = {
+  phase: InvasionPhase;
+  invasionIndex: number;
+  /** Seconds remaining in current phase (prep / warning / resolve / cleanup). */
+  phaseEndsIn: number;
+  waveIndex: number;
+  wavesTotal: number;
+  readyCount: number;
+  playerCount: number;
+};
+
+export type WorldPingSnapshot = {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  by: string;
+  color: number;
+  /** Seconds left before despawn. */
+  ttl: number;
+};
+
 export type GameEvent =
   | { kind: "shot"; playerId: string; hit: boolean }
   | { kind: "melee"; playerId: string; hit: boolean }
@@ -58,6 +101,16 @@ export type GameEvent =
   | { kind: "revive"; playerId: string; by: string }
   | { kind: "lootOpen"; playerId: string; spotId: string }
   | { kind: "eat"; playerId: string; restored: number }
+  | { kind: "repair"; playerId: string; wallId: WallId; hp: number }
+  | { kind: "upgrade"; playerId: string; component: string; tier: number }
+  | { kind: "unlock"; unlock: string }
+  | { kind: "craft"; playerId: string; item: string }
+  | { kind: "wallBreak"; wallId: WallId }
+  | { kind: "phaseChange"; phase: InvasionPhase; invasionIndex: number }
+  | { kind: "waveStart"; waveIndex: number; invasionIndex: number }
+  | { kind: "invasionWon"; invasionIndex: number; scrap: number; ammo: number }
+  | { kind: "invasionLost"; invasionIndex: number }
+  | { kind: "ping"; pingId: string; x: number; y: number; z: number; by: string }
   | { kind: "dev"; message: string };
 
 export type SlotRef = {
@@ -96,6 +149,11 @@ export type ClientMessage =
       /** When prefer is container and target is a loot node. */
       containerLootId?: string;
     }
+  | { type: "setReady"; ready: boolean }
+  | { type: "repairWall"; wallId: WallId }
+  | { type: "upgradeBase"; component: "wall" | "storage" | "workbench" | "generator"; wallId?: WallId }
+  | { type: "craft"; recipe: "shotgun" }
+  | { type: "worldPing"; x: number; y: number; z: number }
   | { type: "devCommand"; line: string };
 
 export type ServerMessage =
@@ -110,6 +168,9 @@ export type ServerMessage =
       zombies: ZombieSnapshot[];
       lootNodes: LootNodeSnapshot[];
       storage: Slot[];
+      base: BaseSnapshot;
+      invasion: InvasionSnapshot;
+      pings: WorldPingSnapshot[];
     }
   | {
       type: "snapshot";
@@ -119,6 +180,9 @@ export type ServerMessage =
       zombies: ZombieSnapshot[];
       lootNodes: LootNodeSnapshot[];
       storage: Slot[];
+      base: BaseSnapshot;
+      invasion: InvasionSnapshot;
+      pings: WorldPingSnapshot[];
       events?: GameEvent[];
     }
   | { type: "playerLeft"; playerId: string }
@@ -139,6 +203,8 @@ function parseSlotRef(raw: unknown): SlotRef | null {
   if (typeof raw.lootId === "string") ref.lootId = raw.lootId;
   return ref;
 }
+
+const WALL_IDS = new Set(["north", "south", "east", "west"]);
 
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (!isRecord(raw) || typeof raw.type !== "string") return null;
@@ -206,6 +272,41 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         containerLootId: typeof raw.containerLootId === "string" ? raw.containerLootId : undefined,
       };
     }
+    case "setReady":
+      return { type: "setReady", ready: Boolean(raw.ready) };
+    case "repairWall":
+      if (typeof raw.wallId === "string" && WALL_IDS.has(raw.wallId)) {
+        return { type: "repairWall", wallId: raw.wallId as WallId };
+      }
+      return null;
+    case "upgradeBase": {
+      const component = raw.component;
+      if (
+        component !== "wall" &&
+        component !== "storage" &&
+        component !== "workbench" &&
+        component !== "generator"
+      ) {
+        return null;
+      }
+      const wallId =
+        typeof raw.wallId === "string" && WALL_IDS.has(raw.wallId)
+          ? (raw.wallId as WallId)
+          : undefined;
+      return { type: "upgradeBase", component, wallId };
+    }
+    case "craft":
+      if (raw.recipe === "shotgun") return { type: "craft", recipe: "shotgun" };
+      return null;
+    case "worldPing":
+      if (
+        typeof raw.x === "number" &&
+        typeof raw.y === "number" &&
+        typeof raw.z === "number"
+      ) {
+        return { type: "worldPing", x: raw.x, y: raw.y, z: raw.z };
+      }
+      return null;
     case "devCommand":
       if (typeof raw.line === "string") {
         return { type: "devCommand", line: raw.line };
@@ -233,5 +334,4 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
   }
 }
 
-// silence unused — ItemStack re-export convenience for callers
 export type { ItemStack };

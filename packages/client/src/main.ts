@@ -1,4 +1,6 @@
 import {
+  BASE,
+  BASE_LAYOUT,
   COMBAT,
   INV,
   ITEMS,
@@ -7,21 +9,28 @@ import {
   STORAGE_POS,
   distXZ,
   getSolidAabbs,
+  type BaseSnapshot,
   type GameEvent,
+  type InvasionSnapshot,
   type LootNodeSnapshot,
   type PlayerSnapshot,
   type ServerMessage,
   type Slot,
   type SlotRef,
+  type WallId,
+  type WorldPingSnapshot,
   type ZombieSnapshot,
 } from "@coop/shared";
 import * as THREE from "three";
+import { sfx } from "./audio/sfx";
 import { FpController } from "./input/FpController";
 import { ClientSocket } from "./net/ClientSocket";
+import { BaseProps } from "./render/baseProps";
 import { LootNodeRenderer } from "./render/lootNodes";
 import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
 import { Viewmodel } from "./render/viewmodel";
+import { WorldPings } from "./render/worldPings";
 import { ZombieRenderer } from "./render/zombies";
 import { DevConsole } from "./ui/DevConsole";
 import { InventoryUi } from "./ui/InventoryUi";
@@ -59,6 +68,22 @@ const playerCountEl = document.getElementById("player-count")!;
 const zombieCountEl = document.getElementById("zombie-count")!;
 const ammoEl = document.getElementById("ammo")!;
 const hintEl = document.getElementById("hint")!;
+
+const invasionHudEl = document.getElementById("invasion-hud")!;
+const invasionPhaseEl = document.getElementById("invasion-phase")!;
+const invasionMetaEl = document.getElementById("invasion-meta")!;
+const invasionReadyEl = document.getElementById("invasion-ready")!;
+const baseHudEl = document.getElementById("base-hud")!;
+const baseCoreEl = document.getElementById("base-core")!;
+const baseWallsEl = document.getElementById("base-walls")!;
+const baseTiersEl = document.getElementById("base-tiers")!;
+const compassEl = document.getElementById("compass")!;
+const compassArrowEl = document.getElementById("compass-arrow")!;
+const summaryOverlayEl = document.getElementById("summary-overlay")!;
+const summaryCardEl = document.getElementById("summary-card")!;
+const summaryTitleEl = document.getElementById("summary-title")!;
+const summaryBodyEl = document.getElementById("summary-body")!;
+const sirenFlashEl = document.getElementById("siren-flash")!;
 
 milestoneEl.textContent = MILESTONE;
 
@@ -113,6 +138,7 @@ function updateHpHud(hp: number, maxHp: number): void {
   if (hp < lastKnownHp) {
     hurtFlashEl.classList.add("on");
     window.setTimeout(() => hurtFlashEl.classList.remove("on"), 180);
+    sfx.hit();
   }
   lastKnownHp = hp;
 }
@@ -130,6 +156,42 @@ function flashLootToast(text: string): void {
   lootToastEl.textContent = text;
   lootToastEl.classList.add("on");
   window.setTimeout(() => lootToastEl.classList.remove("on"), 2200);
+}
+
+function showSummary(kind: "win" | "lose", title: string, body: string): void {
+  summaryCardEl.classList.remove("win", "lose");
+  summaryCardEl.classList.add(kind);
+  summaryTitleEl.textContent = title;
+  summaryBodyEl.textContent = body;
+  summaryOverlayEl.classList.add("visible");
+  window.setTimeout(() => summaryOverlayEl.classList.remove("visible"), 5000);
+}
+
+function triggerSirenFlash(): void {
+  sirenFlashEl.classList.remove("on");
+  void sirenFlashEl.offsetWidth;
+  sirenFlashEl.classList.add("on");
+  window.setTimeout(() => sirenFlashEl.classList.remove("on"), 2200);
+}
+
+function phaseLabel(phase: InvasionSnapshot["phase"]): string {
+  switch (phase) {
+    case "prep":
+      return "PREP";
+    case "warning":
+      return "WARNING";
+    case "waves":
+      return "WAVES";
+    case "resolve":
+      return "RESOLVE";
+  }
+}
+
+function formatTimer(sec: number): string {
+  const s = Math.max(0, Math.ceil(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}:${r.toString().padStart(2, "0")}` : `${s}s`;
 }
 
 function handleEvents(
@@ -150,6 +212,47 @@ function handleEvents(
     }
     if (ev.kind === "eat" && ev.playerId === you) {
       flashLootToast(`Ate food (+${Math.round(ev.restored)} hunger)`);
+    }
+    if (ev.kind === "phaseChange") {
+      if (ev.phase === "warning") {
+        sfx.siren();
+        triggerSirenFlash();
+      } else {
+        sfx.warn();
+      }
+    }
+    if (ev.kind === "invasionWon") {
+      sfx.win();
+      showSummary(
+        "win",
+        `Invasion ${ev.invasionIndex + 1} cleared`,
+        `+${ev.scrap} scrap · +${ev.ammo} ammo`,
+      );
+    }
+    if (ev.kind === "invasionLost") {
+      sfx.lose();
+      showSummary("lose", `Invasion ${ev.invasionIndex + 1} failed`, "Core breached — regroup and rebuild.");
+    }
+    if (ev.kind === "revive") {
+      sfx.revive();
+      if (ev.playerId === you) flashLootToast("Revived!");
+      else if (ev.by === you) flashLootToast("Ally revived");
+    }
+    if (ev.kind === "repair" && ev.playerId === you) {
+      flashLootToast(`Wall repaired (${Math.round(ev.hp)} HP)`);
+    }
+    if (ev.kind === "upgrade" && ev.playerId === you) {
+      flashLootToast(`Upgraded ${ev.component} → T${ev.tier}`);
+    }
+    if (ev.kind === "craft" && ev.playerId === you) {
+      flashLootToast(`Crafted ${ev.item}`);
+    }
+    if (ev.kind === "unlock") {
+      flashLootToast(`Unlocked: ${ev.unlock}`);
+    }
+    if (ev.kind === "wallBreak") {
+      flashLootToast(`Barricade ${ev.wallId} broken!`);
+      sfx.warn();
     }
   }
 }
@@ -180,7 +283,16 @@ const socket = new ClientSocket({
         code: msg.code,
         name,
       };
-      enterWorld(msg.players, msg.zombies, msg.lootNodes, msg.storage);
+      socket.setRejoin({ code: msg.code, name });
+      enterWorld(
+        msg.players,
+        msg.zombies,
+        msg.lootNodes,
+        msg.storage,
+        msg.base,
+        msg.invasion,
+        msg.pings,
+      );
       return;
     }
     if (msg.type === "snapshot" && game) {
@@ -196,11 +308,13 @@ window.setInterval(() => {
 
 btnCreate.addEventListener("click", () => {
   setLobbyError(null);
+  sfx.ensure();
   socket.send({ type: "createRoom", name: commitDisplayName() });
 });
 
 btnJoin.addEventListener("click", () => {
   setLobbyError(null);
+  sfx.ensure();
   const code = codeInput.value.trim().toUpperCase();
   if (code.length < 4) {
     setLobbyError("Enter the 6-character invite code");
@@ -218,6 +332,9 @@ function enterWorld(
   zombies: ZombieSnapshot[],
   lootNodes: LootNodeSnapshot[],
   storage: Slot[],
+  base: BaseSnapshot,
+  invasion: InvasionSnapshot,
+  pings: WorldPingSnapshot[],
 ): void {
   if (!session) return;
   lobbyEl.classList.add("hidden");
@@ -225,6 +342,9 @@ function enterWorld(
   vitalsEl.classList.add("visible");
   hotbarEl.classList.add("visible");
   crosshairEl.classList.add("visible");
+  invasionHudEl.classList.add("visible");
+  baseHudEl.classList.add("visible");
+  compassEl.classList.add("visible");
   roomCodeEl.textContent = session.code;
   youNameEl.textContent = session.name;
   playerCountEl.textContent = String(players.length);
@@ -237,13 +357,19 @@ function enterWorld(
   ammoEl.textContent = String(me?.ammo ?? 0);
 
   if (game) game.dispose();
-  game = startGame(session, players, zombies, lootNodes, storage, {
+  game = startGame(session, players, zombies, lootNodes, storage, base, invasion, pings, {
     sendInput: (packet) => socket.send({ type: "input", ...packet }),
     sendDev: (line) => socket.send({ type: "devCommand", line }),
     sendInvMove: (from, to) => socket.send({ type: "invMove", from, to }),
     sendInvQuickMove: (from, prefer, containerLootId) =>
       socket.send({ type: "invQuickMove", from, prefer, containerLootId }),
     sendOpenLoot: (lootId) => socket.send({ type: "openLoot", lootId }),
+    sendSetReady: (ready) => socket.send({ type: "setReady", ready }),
+    sendRepairWall: (wallId) => socket.send({ type: "repairWall", wallId }),
+    sendUpgradeBase: (component, wallId) =>
+      socket.send({ type: "upgradeBase", component, wallId }),
+    sendCraft: (recipe) => socket.send({ type: "craft", recipe }),
+    sendWorldPing: (x, y, z) => socket.send({ type: "worldPing", x, y, z }),
   });
 }
 
@@ -253,6 +379,9 @@ function startGame(
   initialZombies: ZombieSnapshot[],
   initialLoot: LootNodeSnapshot[],
   initialStorage: Slot[],
+  initialBase: BaseSnapshot,
+  initialInvasion: InvasionSnapshot,
+  initialPings: WorldPingSnapshot[],
   net: {
     sendInput: (packet: {
       seq: number;
@@ -275,6 +404,14 @@ function startGame(
       containerLootId?: string,
     ) => void;
     sendOpenLoot: (lootId: string) => void;
+    sendSetReady: (ready: boolean) => void;
+    sendRepairWall: (wallId: WallId) => void;
+    sendUpgradeBase: (
+      component: "wall" | "storage" | "workbench" | "generator",
+      wallId?: WallId,
+    ) => void;
+    sendCraft: (recipe: "shotgun") => void;
+    sendWorldPing: (x: number, y: number, z: number) => void;
   },
 ) {
   const solids = getSolidAabbs();
@@ -301,6 +438,10 @@ function startGame(
   const zombies = new ZombieRenderer(scene);
   const lootVisuals = new LootNodeRenderer(scene);
   lootVisuals.sync(initialLoot);
+  const baseProps = new BaseProps(scene);
+  baseProps.sync(initialBase);
+  const worldPings = new WorldPings(scene);
+  worldPings.sync(initialPings);
 
   const viewmodel = new Viewmodel();
   camera.add(viewmodel.root);
@@ -357,6 +498,12 @@ function startGame(
     selectedSlot: me?.selectedSlot ?? 0,
   });
 
+  let latestPlayers: PlayerSnapshot[] = initialPlayers;
+  let latestLoot: LootNodeSnapshot[] = initialLoot;
+  let latestStorage: Slot[] = initialStorage;
+  let latestBase: BaseSnapshot = initialBase;
+  let latestInvasion: InvasionSnapshot = initialInvasion;
+
   const onResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -367,9 +514,38 @@ function startGame(
   let last = performance.now();
   let inputAcc = 0;
   let alive = true;
-  let latestPlayers: PlayerSnapshot[] = initialPlayers;
-  let latestLoot: LootNodeSnapshot[] = initialLoot;
-  let latestStorage: Slot[] = initialStorage;
+
+  function updateInvasionHud(inv: InvasionSnapshot, self?: PlayerSnapshot): void {
+    invasionPhaseEl.textContent = phaseLabel(inv.phase);
+    const waveBit =
+      inv.phase === "waves" ? ` · Wave ${inv.waveIndex + 1}/${inv.wavesTotal}` : "";
+    invasionMetaEl.textContent = `Invasion ${inv.invasionIndex + 1}${waveBit} · ${formatTimer(inv.phaseEndsIn)}`;
+    const readyHint =
+      inv.phase === "prep"
+        ? self?.ready
+          ? "You are READY · R to cancel"
+          : "R — Ready"
+        : "";
+    invasionReadyEl.textContent = `Ready ${inv.readyCount} / ${inv.playerCount}${readyHint ? ` · ${readyHint}` : ""}`;
+    invasionReadyEl.style.color =
+      inv.phase === "warning" ? "#f85149" : inv.phase === "prep" ? "#3fb950" : "#8b949e";
+  }
+
+  function updateBaseHud(base: BaseSnapshot): void {
+    baseCoreEl.textContent = `${Math.round(base.coreHp)} / ${Math.round(base.coreMaxHp)}`;
+    const intact = base.walls.filter((w) => !w.broken && w.hp > 0).length;
+    const wallHp = base.walls.map((w) => (w.broken ? 0 : Math.round(w.hp))).join("/");
+    baseWallsEl.textContent = `${intact}/4 up · ${wallHp}`;
+    baseTiersEl.textContent = `W${Math.min(...base.walls.map((w) => w.tier))} · St${base.storageTier} · Wb${base.workbenchTier} · Gen${base.generatorTier}`;
+  }
+
+  function updateCompass(): void {
+    const dx = 0 - fp.state.x;
+    const dz = 0 - fp.state.z;
+    const bearing = Math.atan2(dx, -dz);
+    const relative = bearing - fp.state.yaw;
+    compassArrowEl.style.transform = `rotate(${(relative * 180) / Math.PI}deg)`;
+  }
 
   function updateReviveHud(self: PlayerSnapshot): void {
     const progress = self.reviveProgress;
@@ -433,6 +609,116 @@ function startGame(
     return distXZ(fp.state.x, fp.state.z, STORAGE_POS.x, STORAGE_POS.z) <= INV.storageRange;
   }
 
+  function nearWorkbench(): boolean {
+    const wb = BASE_LAYOUT.workbench;
+    return distXZ(fp.state.x, fp.state.z, wb.x, wb.z) <= BASE.interactRange;
+  }
+
+  function nearGenerator(): boolean {
+    const gen = BASE_LAYOUT.generator;
+    return distXZ(fp.state.x, fp.state.z, gen.x, gen.z) <= BASE.interactRange;
+  }
+
+  function nearestWall(): (typeof latestBase.walls)[number] | null {
+    let best: (typeof latestBase.walls)[number] | null = null;
+    let dist = BASE.interactRange + 2;
+    for (const wall of latestBase.walls) {
+      const layout = BASE_LAYOUT.walls[wall.id];
+      const d = distXZ(fp.state.x, fp.state.z, layout.x, layout.z);
+      if (d < dist) {
+        dist = d;
+        best = wall;
+      }
+    }
+    return best;
+  }
+
+  function sendLookPing(): void {
+    const yaw = fp.state.yaw;
+    const pitch = fp.state.pitch;
+    const range = 20;
+    const dirX = -Math.sin(yaw) * Math.cos(pitch);
+    const dirY = Math.sin(pitch);
+    const dirZ = -Math.cos(yaw) * Math.cos(pitch);
+    let x = fp.state.x + dirX * range;
+    let y = fp.state.y + PLAYER.eyeHeight + dirY * range;
+    let z = fp.state.z + dirZ * range;
+    if (pitch < 0.15) {
+      if (dirY < -0.05) {
+        const t = Math.max(0.1, (fp.state.y + PLAYER.eyeHeight) / Math.max(0.05, -dirY));
+        if (t < range) {
+          x = fp.state.x + dirX * t;
+          y = 0.15;
+          z = fp.state.z + dirZ * t;
+        } else {
+          y = Math.max(0.15, y);
+        }
+      } else {
+        y = Math.max(0.15, y);
+      }
+    } else {
+      y = Math.max(0.15, y);
+    }
+    net.sendWorldPing(x, y, z);
+  }
+
+  const onGameKeyDown = (e: KeyboardEvent) => {
+    if (!alive || consoleUi.isOpen() || invUi.isOpen) return;
+    if (e.repeat) return;
+    const self = latestPlayers.find((p) => p.id === active.playerId);
+    if (!self || self.downed) return;
+
+    if (e.code === "KeyR") {
+      e.preventDefault();
+      if (latestInvasion.phase === "prep") {
+        net.sendSetReady(!self.ready);
+      }
+      return;
+    }
+
+    if (e.code === "KeyQ") {
+      e.preventDefault();
+      sendLookPing();
+      return;
+    }
+
+    if (e.code === "KeyF") {
+      e.preventDefault();
+      const wall = nearestWall();
+      if (wall && (wall.hp < wall.maxHp || wall.broken)) net.sendRepairWall(wall.id);
+      return;
+    }
+
+    if (e.code === "KeyT") {
+      e.preventDefault();
+      if (nearWorkbench() && latestBase.workbenchTier < 3) {
+        net.sendUpgradeBase("workbench");
+        return;
+      }
+      if (nearGenerator() && latestBase.generatorTier < 3) {
+        net.sendUpgradeBase("generator");
+        return;
+      }
+      if (nearStorage() && latestBase.storageTier < 3) {
+        net.sendUpgradeBase("storage");
+        return;
+      }
+      const wall = nearestWall();
+      if (wall && wall.tier < 3) {
+        net.sendUpgradeBase("wall", wall.id);
+      }
+      return;
+    }
+
+    if (e.code === "KeyC") {
+      e.preventDefault();
+      if (nearWorkbench() && latestBase.unlocks.includes("shotgun")) {
+        net.sendCraft("shotgun");
+      }
+    }
+  };
+  window.addEventListener("keydown", onGameKeyDown);
+
   function handleInteractEdge(self: PlayerSnapshot): void {
     if (!fp.consumeInteractEdge() || self.downed) return;
 
@@ -441,7 +727,6 @@ function startGame(
       return;
     }
 
-    // Revive takes priority — don't open menus when a downed ally is in range.
     if (nearestDowned(active.playerId)) return;
 
     if (nearStorage()) {
@@ -452,13 +737,20 @@ function startGame(
     const loot = nearestLoot();
     if (loot) {
       net.sendOpenLoot(loot.id);
-      // Open with current snapshot; next snapshot will fill rolled slots.
       const node = latestLoot.find((n) => n.id === loot.id) ?? loot;
       invUi.openLoot(node.id, node.label, node.slots);
       return;
     }
 
     invUi.openPlayer();
+  }
+
+  function handlePingEdge(self: PlayerSnapshot): void {
+    if (self.downed) {
+      fp.consumePingEdge();
+      return;
+    }
+    if (fp.consumePingEdge()) sendLookPing();
   }
 
   function updatePrompts(self: PlayerSnapshot): void {
@@ -490,10 +782,41 @@ function startGame(
       return;
     }
 
-    if (nearStorage()) {
+    if (nearWorkbench()) {
+      const parts: string[] = [];
+      if (latestBase.unlocks.includes("shotgun")) parts.push("C — craft shotgun");
+      if (latestBase.workbenchTier < 3) parts.push("T — upgrade workbench");
+      if (parts.length) {
+        promptEl.classList.add("visible");
+        promptEl.textContent = parts.join(" · ");
+        return;
+      }
+    }
+
+    if (nearGenerator() && latestBase.generatorTier < 3) {
       promptEl.classList.add("visible");
-      promptEl.textContent = "E — open storage";
+      promptEl.textContent = "T — upgrade generator";
       return;
+    }
+
+    if (nearStorage()) {
+      const parts = ["E — open storage"];
+      if (latestBase.storageTier < 3) parts.push("T — upgrade storage");
+      promptEl.classList.add("visible");
+      promptEl.textContent = parts.join(" · ");
+      return;
+    }
+
+    const wall = nearestWall();
+    if (wall) {
+      const parts: string[] = [];
+      if (wall.hp < wall.maxHp || wall.broken) parts.push("F — repair wall");
+      if (wall.tier < 3) parts.push("T — upgrade wall");
+      if (parts.length) {
+        promptEl.classList.add("visible");
+        promptEl.textContent = parts.join(" · ");
+        return;
+      }
     }
 
     const loot = nearestLoot();
@@ -506,11 +829,16 @@ function startGame(
     promptEl.classList.remove("visible");
   }
 
+  updateInvasionHud(initialInvasion, me);
+  updateBaseHud(initialBase);
+
   function onSnapshot(msg: Extract<ServerMessage, { type: "snapshot" }>): void {
     if (msg.you !== active.playerId) return;
     latestPlayers = msg.players;
     latestLoot = msg.lootNodes;
     latestStorage = msg.storage;
+    latestBase = msg.base;
+    latestInvasion = msg.invasion;
     playerCountEl.textContent = String(msg.players.length);
     zombieCountEl.textContent = String(msg.zombies.length);
     const self = msg.players.find((p) => p.id === active.playerId);
@@ -519,11 +847,10 @@ function startGame(
       fp.setSelectedSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
       updateHungerHud(self.hunger, self.maxHunger);
-      ammoEl.textContent = String(self.ammo);
-      const active = self.hotbar[self.selectedSlot];
-      viewmodel.setItem(active?.id ?? null);
+      const held = self.hotbar[self.selectedSlot];
+      viewmodel.setItem(held?.id ?? null);
       const gunHint =
-        active && ITEMS[active.id].kind === "gun" ? ITEMS[active.id].label : "no gun";
+        held && ITEMS[held.id].kind === "gun" ? ITEMS[held.id].label : "no gun";
       ammoEl.textContent = `${self.ammo} · ${gunHint}`;
 
       const lootSlots =
@@ -538,11 +865,18 @@ function startGame(
         selectedSlot: self.selectedSlot,
       });
       handleInteractEdge(self);
+      handlePingEdge(self);
       updatePrompts(self);
+      updateInvasionHud(msg.invasion, self);
+    } else {
+      updateInvasionHud(msg.invasion);
     }
+    updateBaseHud(msg.base);
     remotes.sync(msg.players, active.playerId);
     zombies.sync(msg.zombies);
     lootVisuals.sync(msg.lootNodes);
+    baseProps.sync(msg.base);
+    worldPings.sync(msg.pings);
     handleEvents(msg.events, active.playerId, viewmodel);
   }
 
@@ -566,7 +900,6 @@ function startGame(
       inputAcc = 0;
       if (!consoleUi.isOpen()) {
         const packet = fp.nextInputPacket();
-        // While inventory is open, don't hold E for revive, and don't shoot.
         if (invUi.isOpen) {
           packet.interact = false;
           packet.shoot = false;
@@ -581,8 +914,10 @@ function startGame(
       }
     }
 
-    // Poll E edge between snapshots so UI feels snappy.
-    if (self) handleInteractEdge(self);
+    if (self) {
+      handleInteractEdge(self);
+      handlePingEdge(self);
+    }
 
     camera.position.set(
       fp.state.x,
@@ -592,6 +927,7 @@ function startGame(
     camera.rotation.order = "YXZ";
     camera.rotation.y = fp.state.yaw;
     camera.rotation.x = fp.state.pitch;
+    updateCompass();
 
     hintEl.textContent = consoleUi.isOpen()
       ? "Dev console open — ` to close"
@@ -601,7 +937,7 @@ function startGame(
           ? "Click the game to capture mouse"
           : fp.isSprinting()
             ? "Sprinting · release Shift to walk"
-            : "1–6 hotbar · Shift sprint · E inventory · LMB use (shoot/melee/eat) · Space jump · ` console";
+            : "1–6 · Shift sprint · E inv · R ready · Q/MMB ping · F repair · T upgrade · C craft · LMB use · ` console";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
@@ -617,9 +953,12 @@ function startGame(
     dispose() {
       alive = false;
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onGameKeyDown);
       fp.dispose();
       invUi.dispose();
       consoleUi.dispose();
+      baseProps.dispose();
+      worldPings.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       promptEl.classList.remove("visible");
@@ -628,6 +967,11 @@ function startGame(
       lootToastEl.classList.remove("on");
       hotbarEl.classList.remove("visible");
       vitalsEl.classList.remove("visible");
+      invasionHudEl.classList.remove("visible");
+      baseHudEl.classList.remove("visible");
+      compassEl.classList.remove("visible");
+      summaryOverlayEl.classList.remove("visible");
+      sirenFlashEl.classList.remove("on");
     },
   };
 }

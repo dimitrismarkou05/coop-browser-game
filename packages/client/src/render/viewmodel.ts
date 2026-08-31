@@ -173,6 +173,23 @@ function buildWeaponMesh(kind: ViewKind): THREE.Group | null {
     return g;
   }
 
+  if (kind === "shotgun") {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.42), mat(color));
+    body.position.set(0, 0.03, -0.16);
+    g.add(body);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.16), mat(0x5c3a1e, 0.1));
+    stock.position.set(0, 0.01, 0.1);
+    g.add(stock);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.28, 8), mat(0x222));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.04, -0.48);
+    g.add(barrel);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, 0.07), mat(0x2a2118, 0.1));
+    grip.position.set(0, -0.07, 0);
+    g.add(grip);
+    return g;
+  }
+
   if (kind === "knife") {
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.018, 0.1, 6), mat(0x5c3a1e, 0.1));
     handle.rotation.x = Math.PI / 2;

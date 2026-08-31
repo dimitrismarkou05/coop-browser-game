@@ -9,6 +9,7 @@ export type ItemId =
   | "pistol"
   | "smg"
   | "ar"
+  | "shotgun"
   | "knife"
   | "sword"
   | "axe";
@@ -38,6 +39,7 @@ export const ITEM_IDS: readonly ItemId[] = [
   "pistol",
   "smg",
   "ar",
+  "shotgun",
   "knife",
   "sword",
   "axe",
@@ -59,6 +61,14 @@ export const ITEMS: Record<ItemId, ItemDef> = {
   },
   smg: { id: "smg", label: "SMG", kind: "gun", maxStack: 1, color: "#58a6ff", weaponId: "smg" },
   ar: { id: "ar", label: "AR", kind: "gun", maxStack: 1, color: "#3d9a5f", weaponId: "ar" },
+  shotgun: {
+    id: "shotgun",
+    label: "Shotgun",
+    kind: "gun",
+    maxStack: 1,
+    color: "#9a3412",
+    weaponId: "shotgun",
+  },
   knife: {
     id: "knife",
     label: "Knife",

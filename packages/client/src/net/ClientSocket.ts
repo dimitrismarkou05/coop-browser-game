@@ -10,9 +10,13 @@ type Handlers = {
   onMessage: (msg: ServerMessage) => void;
 };
 
+type RejoinSession = { code: string; name: string };
+
 export class ClientSocket {
   private ws: WebSocket | null = null;
   private disposed = false;
+  private hadConnection = false;
+  private pendingRejoin: RejoinSession | null = null;
 
   constructor(private readonly handlers: Handlers) {
     this.connect();
@@ -22,6 +26,11 @@ export class ClientSocket {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }
+  }
+
+  /** Remember room credentials so a reconnect can auto-joinRoom. */
+  setRejoin(session: RejoinSession | null): void {
+    this.pendingRejoin = session;
   }
 
   dispose(): void {
@@ -40,6 +49,14 @@ export class ClientSocket {
     ws.addEventListener("open", () => {
       this.handlers.onStatus("Connected", "connected");
       this.send({ type: "ping", clientTime: performance.now() });
+      if (this.hadConnection && this.pendingRejoin) {
+        this.send({
+          type: "joinRoom",
+          code: this.pendingRejoin.code,
+          name: this.pendingRejoin.name,
+        });
+      }
+      this.hadConnection = true;
     });
 
     ws.addEventListener("close", () => {

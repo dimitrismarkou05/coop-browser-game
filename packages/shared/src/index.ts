@@ -8,3 +8,5 @@ export * from "./combat.js";
 export * from "./balance/zombies.js";
 export * from "./balance/weapons.js";
 export * from "./balance/loot.js";
+export * from "./balance/baseUpgrades.js";
+export * from "./balance/invasions.js";

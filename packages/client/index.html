@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Co-op Zombie — M6</title>
+    <title>Co-op Zombie — M10</title>
     <style>
       * {
         box-sizing: border-box;
@@ -442,8 +442,8 @@
         justify-content: flex-start;
       }
       .mc-pip {
-        width: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5);
-        height: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5);
+        width: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5 * 0.88);
+        height: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5 * 0.88);
         image-rendering: pixelated;
         flex-shrink: 0;
         filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65));
@@ -578,6 +578,159 @@
         color: #8b949e;
         text-align: center;
       }
+      #invasion-hud {
+        position: fixed;
+        top: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 12;
+        min-width: 220px;
+        padding: 10px 16px;
+        border-radius: 10px;
+        background: rgba(13, 17, 23, 0.88);
+        border: 1px solid #30363d;
+        text-align: center;
+        pointer-events: none;
+        display: none;
+        line-height: 1.4;
+      }
+      #invasion-hud.visible {
+        display: block;
+      }
+      #invasion-phase {
+        font-size: 15px;
+        font-weight: 650;
+        letter-spacing: 0.03em;
+      }
+      #invasion-meta {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #8b949e;
+      }
+      #invasion-ready {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #3fb950;
+      }
+      #base-hud {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        z-index: 12;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: rgba(13, 17, 23, 0.82);
+        border: 1px solid #30363d;
+        font-size: 12px;
+        line-height: 1.45;
+        pointer-events: none;
+        display: none;
+        min-width: 150px;
+      }
+      #base-hud.visible {
+        display: block;
+      }
+      #base-hud .label {
+        color: #8b949e;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #compass {
+        position: fixed;
+        bottom: 120px;
+        right: 20px;
+        z-index: 12;
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: rgba(13, 17, 23, 0.75);
+        border: 1px solid #30363d;
+        display: none;
+        pointer-events: none;
+      }
+      #compass.visible {
+        display: block;
+      }
+      #compass-arrow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 0;
+        height: 0;
+        margin: -14px 0 0 -8px;
+        border-left: 8px solid transparent;
+        border-right: 8px solid transparent;
+        border-bottom: 18px solid #3d9a5f;
+        transform-origin: 50% 14px;
+      }
+      #compass-label {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 4px;
+        text-align: center;
+        font-size: 9px;
+        color: #8b949e;
+        letter-spacing: 0.06em;
+      }
+      #summary-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 35;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(8, 12, 18, 0.72);
+        pointer-events: none;
+      }
+      #summary-overlay.visible {
+        display: flex;
+      }
+      #summary-card {
+        padding: 28px 32px;
+        border-radius: 12px;
+        border: 1px solid #30363d;
+        background: rgba(22, 27, 34, 0.96);
+        text-align: center;
+        max-width: 360px;
+      }
+      #summary-card.win {
+        border-color: #3d9a5f;
+      }
+      #summary-card.lose {
+        border-color: #f85149;
+      }
+      #summary-title {
+        margin: 0 0 8px;
+        font-size: 22px;
+        font-weight: 650;
+      }
+      #summary-body {
+        margin: 0;
+        color: #8b949e;
+        font-size: 14px;
+      }
+      #siren-flash {
+        position: fixed;
+        inset: 0;
+        z-index: 7;
+        pointer-events: none;
+        background: radial-gradient(circle at center, transparent 35%, rgba(180, 20, 20, 0.55));
+        opacity: 0;
+      }
+      #siren-flash.on {
+        animation: siren-pulse 0.7s ease-in-out 3;
+      }
+      @keyframes siren-pulse {
+        0%,
+        100% {
+          opacity: 0;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
       canvas {
         display: block;
       }
@@ -587,7 +740,10 @@
     <div id="lobby">
       <div class="panel">
         <h1>Co-op Zombie</h1>
-        <p>M6 — hotbar, inventory (E), loot &amp; storage drag-and-drop.</p>
+        <p>
+          M10 — invasions, base repair/upgrades, world pings. Worlds persist by invite
+          code.
+        </p>
         <label for="name">Display name</label>
         <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" list="name-history" />
         <datalist id="name-history"></datalist>
@@ -604,7 +760,7 @@
 
     <div id="hud">
       <div class="label">Milestone</div>
-      <div id="milestone">M3</div>
+      <div id="milestone">M10</div>
       <div class="label" style="margin-top: 8px">Room</div>
       <div id="room-code">—</div>
       <div class="label" style="margin-top: 8px">You</div>
@@ -622,6 +778,30 @@
       <div class="label" style="margin-top: 8px">Controls</div>
       <div id="hint">Click the game to capture mouse</div>
     </div>
+    <div id="invasion-hud">
+      <div id="invasion-phase">PREP</div>
+      <div id="invasion-meta">Invasion 1 · —</div>
+      <div id="invasion-ready">Ready 0 / 0 · R to toggle</div>
+    </div>
+    <div id="base-hud">
+      <div class="label">Core</div>
+      <div id="base-core">—</div>
+      <div class="label" style="margin-top: 6px">Walls</div>
+      <div id="base-walls">—</div>
+      <div class="label" style="margin-top: 6px">Tiers</div>
+      <div id="base-tiers">—</div>
+    </div>
+    <div id="compass" aria-hidden="true">
+      <div id="compass-arrow"></div>
+      <div id="compass-label">BASE</div>
+    </div>
+    <div id="summary-overlay" aria-hidden="true">
+      <div id="summary-card">
+        <h2 id="summary-title">Invasion</h2>
+        <p id="summary-body"></p>
+      </div>
+    </div>
+    <div id="siren-flash" aria-hidden="true"></div>
     <div id="vitals">
       <div id="hearts" aria-label="Health"></div>
       <div id="food-icons" aria-label="Hunger"></div>
