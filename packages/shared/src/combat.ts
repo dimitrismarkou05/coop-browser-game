@@ -90,7 +90,11 @@ export function raycastSphere(
   return t;
 }
 
-/** Horizontal ray vs vertical capsule (circle in XZ + height band). */
+/**
+ * Ray vs vertical capsule (infinite XZ circle clipped to [minY, maxY]).
+ * Accepts any t on the cylinder segment whose Y lies in the height band
+ * (not only the discrete entry/exit samples — fixes near-miss headshots).
+ */
 export function raycastCapsuleXZ(
   origin: Vec3,
   dir: Vec3,
@@ -105,7 +109,6 @@ export function raycastCapsuleXZ(
   const dz = dir.z;
   const flat = Math.hypot(dx, dz);
   if (flat < 1e-6) {
-    // Nearly vertical aim — fall back to sphere at mid height.
     return raycastSphere(
       origin,
       dir,
@@ -123,14 +126,43 @@ export function raycastCapsuleXZ(
   const disc = b * b - 4 * a * c;
   if (disc < 0) return null;
   const s = Math.sqrt(disc);
-  const t0 = (-b - s) / (2 * a);
-  const t1 = (-b + s) / (2 * a);
-  for (const t of [t0, t1]) {
-    if (t < 0 || t > maxDist) continue;
-    const y = origin.y + dir.y * t;
-    if (y >= minY && y <= maxY) return t;
+  let tEnter = (-b - s) / (2 * a);
+  let tExit = (-b + s) / (2 * a);
+  if (tEnter > tExit) {
+    const tmp = tEnter;
+    tEnter = tExit;
+    tExit = tmp;
   }
-  return null;
+
+  const tLo = Math.max(0, tEnter);
+  const tHi = Math.min(maxDist, tExit);
+  if (tLo > tHi) return null;
+
+  const y0 = origin.y + dir.y * tLo;
+  const y1 = origin.y + dir.y * tHi;
+  const dy = dir.y;
+
+  // Entire segment already in band — take earliest.
+  if (y0 >= minY && y0 <= maxY) return tLo;
+  if (Math.abs(dy) < 1e-8) {
+    // Horizontal ray: either whole segment is in band or none.
+    return y0 >= minY && y0 <= maxY ? tLo : null;
+  }
+
+  // Clip segment to Y planes and take earliest valid t.
+  let best: number | null = null;
+  const candidates = [tLo, tHi];
+  if (dy !== 0) {
+    candidates.push((minY - origin.y) / dy);
+    candidates.push((maxY - origin.y) / dy);
+  }
+  for (const t of candidates) {
+    if (t < tLo - 1e-6 || t > tHi + 1e-6) continue;
+    const y = origin.y + dy * t;
+    if (y < minY - 1e-4 || y > maxY + 1e-4) continue;
+    if (best === null || t < best) best = Math.max(tLo, Math.min(tHi, t));
+  }
+  return best;
 }
 
 export function forwardFlat(yaw: number): { x: number; z: number } {

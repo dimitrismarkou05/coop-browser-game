@@ -182,9 +182,9 @@ function phaseLabel(phase: InvasionSnapshot["phase"]): string {
     case "warning":
       return "WARNING";
     case "waves":
-      return "WAVES";
+      return "WAVE";
     case "resolve":
-      return "RESOLVE";
+      return "PREP";
   }
 }
 
@@ -227,13 +227,13 @@ function handleEvents(
       sfx.win();
       showSummary(
         "win",
-        `Invasion ${ev.invasionIndex + 1} cleared`,
-        `+${ev.scrap} scrap · +${ev.ammo} ammo`,
+        `Wave ${ev.invasionIndex + 1} cleared`,
+        `Back to base · +${ev.scrap} scrap · +${ev.ammo} ammo · R when ready`,
       );
     }
     if (ev.kind === "invasionLost") {
       sfx.lose();
-      showSummary("lose", `Invasion ${ev.invasionIndex + 1} failed`, "Core breached — regroup and rebuild.");
+      showSummary("lose", `Wave ${ev.invasionIndex + 1} failed`, "Core breached — regroup and rebuild.");
     }
     if (ev.kind === "revive") {
       sfx.revive();
@@ -522,12 +522,12 @@ function startGame(
 
   function updateInvasionHud(inv: InvasionSnapshot, self?: PlayerSnapshot): void {
     invasionPhaseEl.textContent = phaseLabel(inv.phase);
-    const waveBit =
-      inv.phase === "waves" ? ` · Wave ${inv.waveIndex + 1}/${inv.wavesTotal}` : "";
     invasionMetaEl.textContent =
       inv.phase === "prep"
-        ? `Invasion ${inv.invasionIndex + 1} · wait for ready`
-        : `Invasion ${inv.invasionIndex + 1}${waveBit} · ${formatTimer(inv.phaseEndsIn)}`;
+        ? `Wave ${inv.invasionIndex + 1} · wait for ready`
+        : inv.phase === "warning"
+          ? `Wave ${inv.invasionIndex + 1} incoming · ${formatTimer(inv.phaseEndsIn)}`
+          : `Wave ${inv.invasionIndex + 1} · ${formatTimer(inv.phaseEndsIn)}`;
     const readyHint =
       inv.phase === "prep"
         ? self?.ready

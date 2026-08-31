@@ -1109,26 +1109,15 @@ export class Room {
 
   private tryShoot(player: RoomPlayer): void {
     const stack = this.selectedItem(player);
-    if (!stack || ITEMS[stack.id].kind !== "gun" || !isWeaponId(stack.id)) {
-      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
-      return;
-    }
+    if (!stack || ITEMS[stack.id].kind !== "gun" || !isWeaponId(stack.id)) return;
     const gun = WEAPONS[stack.id];
-    if (gun.kind !== "gun") {
-      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
-      return;
-    }
-    if (player.weaponCd > 0) {
-      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
-      return;
-    }
+    if (gun.kind !== "gun") return;
+    // No dry-fire events — client was animating shots with 0 ammo.
+    if (player.weaponCd > 0) return;
 
     const ammoLeft =
       countItem(player.hotbar, "ammo") + countItem(player.inventory, "ammo");
-    if (ammoLeft < gun.ammoCost) {
-      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
-      return;
-    }
+    if (ammoLeft < gun.ammoCost) return;
 
     let need = gun.ammoCost;
     need = consumeItem(player.hotbar, "ammo", need);
@@ -1150,9 +1139,9 @@ export class Room {
         dir,
         zombie.x,
         zombie.z,
-        def.radius * 1.25,
-        0.1,
-        def.height + 0.2,
+        def.radius,
+        0,
+        def.height + 0.35,
         maxT,
       );
       if (t !== null && t < bestT) {
@@ -1410,6 +1399,7 @@ export class Room {
     return this.zombies.size;
   }
 
+  /** Wave cleared — reward, teleport to base, back to prep for next ready-up. */
   private resolveInvasionWin(): void {
     this.clearInvasionZombies();
     const scrap =
@@ -1418,24 +1408,29 @@ export class Room {
     this.depositIntoStorage("scrap", scrap);
     this.depositIntoStorage("ammo", ammo);
 
+    const clearedIndex = this.invasionIndex;
     this.invasionIndex += 1;
     this.syncWorkbenchUnlocks(true);
 
-    this.phase = "resolve";
-    this.phaseTimer = INVASION.resolveSec;
+    for (const player of this.players.values()) {
+      this.respawnPlayer(player);
+      player.ready = false;
+    }
+
+    this.phase = "prep";
+    this.phaseTimer = prepDurationSec(this.invasionIndex);
     this.cleanupTimer = null;
     this.waveIndex = 0;
-    this.clearReadyFlags();
 
     this.tickEvents.push({
       kind: "invasionWon",
-      invasionIndex: this.invasionIndex - 1,
+      invasionIndex: clearedIndex,
       scrap,
       ammo,
     });
     this.tickEvents.push({
       kind: "phaseChange",
-      phase: "resolve",
+      phase: "prep",
       invasionIndex: this.invasionIndex,
     });
     this.requestSave();
@@ -1504,7 +1499,7 @@ export class Room {
 
   private updateInvasion(dt: number): void {
     if (this.phase === "prep") {
-      // Indefinite prep — only all-ready (handled in setReady) starts the invasion.
+      // Indefinite prep — only all-ready (handled in setReady) starts the next wave.
       return;
     }
 
@@ -1521,51 +1516,29 @@ export class Room {
     }
 
     if (this.phase === "waves") {
-      if (this.cleanupTimer !== null) {
-        this.cleanupTimer -= dt;
-      }
       if (this.coreHp <= 0) {
         this.invasionLost();
         return;
       }
 
-      const left = this.countInvasionZombies();
-      const lastWave = this.waveIndex >= this.wavesTotal - 1;
-
-      if (left === 0) {
-        if (this.waveIndex + 1 < this.wavesTotal) {
-          const next = this.waveIndex + 1;
-          this.spawnWave(next);
-          this.tickEvents.push({
-            kind: "waveStart",
-            waveIndex: next,
-            invasionIndex: this.invasionIndex,
-          });
-        } else {
-          this.resolveInvasionWin();
-        }
-        return;
-      }
-
-      if (lastWave && this.cleanupTimer !== null && this.cleanupTimer <= 0) {
+      // One pack per ready-up; when cleared → prep for next wave.
+      if (this.countInvasionZombies() === 0) {
         this.resolveInvasionWin();
       }
       return;
     }
 
+    // Legacy resolve phase: snap back to prep immediately.
     if (this.phase === "resolve") {
-      this.phaseTimer -= dt;
-      if (this.phaseTimer <= 0) {
-        this.phase = "prep";
-        this.phaseTimer = prepDurationSec(this.invasionIndex);
-        this.cleanupTimer = null;
-        this.clearReadyFlags();
-        this.tickEvents.push({
-          kind: "phaseChange",
-          phase: "prep",
-          invasionIndex: this.invasionIndex,
-        });
-      }
+      this.phase = "prep";
+      this.phaseTimer = prepDurationSec(this.invasionIndex);
+      this.cleanupTimer = null;
+      this.clearReadyFlags();
+      this.tickEvents.push({
+        kind: "phaseChange",
+        phase: "prep",
+        invasionIndex: this.invasionIndex,
+      });
     }
   }
 

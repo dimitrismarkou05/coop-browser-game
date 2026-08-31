@@ -10,59 +10,51 @@ export type WaveSpawn = {
 };
 
 export const INVASION = {
-  /** Prep has no auto-timer — invasion starts only when all players ready. */
+  /** Prep has no auto-timer — next wave starts only when all players ready. */
   prepMaxSec: 0,
   prepMinSec: 0,
   prepShrinkPerInvasion: 0,
-  /** Base warning before waves (generator adds bonus). */
-  warningBaseSec: 40,
-  /** Cleanup grace after last wave before auto-win if stragglers remain. */
-  cleanupSec: 45,
-  /** Brief resolve screen before next prep. */
-  resolveSec: 12,
-  wavesPerInvasion: 3,
+  /** Short warning before each wave (generator still adds bonus). */
+  warningBaseSec: 5,
+  cleanupSec: 0,
+  resolveSec: 0,
+  /** One spawn pack per ready-up cycle (then back to prep). */
+  wavesPerInvasion: 1,
+  zombiesPerWave: 5,
   /** Edge spawn distance from origin. */
-  spawnRadius: 36,
-  /** Soft-fail wall damage fraction on wipe. */
+  spawnRadius: 28,
   wipeWallDamageFrac: 0.45,
   wipeCoreRestoreFrac: 0.55,
-  rewardScrap: 10,
-  rewardAmmo: 16,
-  rewardScrapPerIndex: 2,
+  rewardScrap: 6,
+  rewardAmmo: 10,
+  rewardScrapPerIndex: 1,
 } as const;
 
-/** Unused for countdown — prep is indefinite until all ready. */
 export function prepDurationSec(_invasionIndex: number): number {
   return 0;
 }
 
-export function warningDurationSec(generatorTier: number, warningBonusSec: number): number {
+export function warningDurationSec(_generatorTier: number, warningBonusSec: number): number {
   return INVASION.warningBaseSec + warningBonusSec;
 }
 
-/** Wave composition scales with invasion index (0-based). */
-export function waveSpawns(invasionIndex: number, waveIndex: number): WaveSpawn[] {
-  const i = Math.max(0, invasionIndex);
-  const w = waveIndex;
-  const walkers = 4 + i * 2 + w * 2;
-  const runners = w >= 1 || i >= 1 ? 1 + Math.floor(i / 2) + (w >= 2 ? 1 : 0) : 0;
-  const bruisers = w >= 2 || i >= 2 ? 1 + Math.floor(i / 3) : i >= 1 && w >= 1 ? 1 : 0;
-  const out: WaveSpawn[] = [{ kind: "walker", count: walkers }];
-  if (runners > 0) out.push({ kind: "runner", count: runners });
-  if (bruisers > 0) out.push({ kind: "bruiser", count: bruisers });
-  return out;
+/** Fixed pack for now — 5 walkers each wave. */
+export function waveSpawns(_invasionIndex: number, _waveIndex: number): WaveSpawn[] {
+  return [{ kind: "walker", count: INVASION.zombiesPerWave }];
 }
 
 /** Map-edge spawn points around the safehouse. */
 export function invasionSpawnPoint(slot: number): { x: number; z: number } {
   const r = INVASION.spawnRadius;
   const angles = [
-    Math.PI * 0.15,
-    Math.PI * 0.5,
-    Math.PI * 0.85,
+    Math.PI * 0.1,
+    Math.PI * 0.35,
+    Math.PI * 0.65,
+    Math.PI * 0.9,
     Math.PI * 1.15,
-    Math.PI * 1.5,
-    Math.PI * 1.85,
+    Math.PI * 1.4,
+    Math.PI * 1.65,
+    Math.PI * 1.9,
   ];
   const a = angles[slot % angles.length]!;
   return { x: Math.sin(a) * r, z: -Math.cos(a) * r };
