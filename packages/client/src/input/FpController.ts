@@ -16,6 +16,17 @@ export type FpState = {
   pitch: number;
 };
 
+const MOVE_KEYS = new Set([
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+]);
+
 export class FpController {
   readonly state: FpState;
   private readonly keys = new Set<string>();
@@ -29,6 +40,8 @@ export class FpController {
   private blocked = false;
   private selectedSlot = 0;
   private slotEdge: number | null = null;
+  /** Send an input packet ASAP (e.g. on key release so server stops). */
+  private forceInput = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -46,6 +59,7 @@ export class FpController {
 
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("blur", this.onBlur);
     canvas.addEventListener("click", this.requestLock);
     canvas.addEventListener("mousedown", this.onMouseDown);
     canvas.addEventListener("auxclick", this.onAuxClick);
@@ -56,6 +70,7 @@ export class FpController {
   dispose(): void {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.onBlur);
     this.canvas.removeEventListener("click", this.requestLock);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     this.canvas.removeEventListener("auxclick", this.onAuxClick);
@@ -73,7 +88,10 @@ export class FpController {
 
   setBlocked(blocked: boolean): void {
     this.blocked = blocked;
-    if (blocked) this.keys.clear();
+    if (blocked) {
+      this.keys.clear();
+      this.forceInput = true;
+    }
   }
 
   setSelectedSlot(n: number): void {
@@ -92,7 +110,20 @@ export class FpController {
     );
   }
 
-  /** Consume one-frame E press for inventory open/close. */
+  /** True if any move key is held. */
+  isMoving(): boolean {
+    const a = this.getAxes();
+    return a.forward !== 0 || a.strafe !== 0;
+  }
+
+  /** Consume request to send input immediately (stop / menu). */
+  consumeForceInput(): boolean {
+    const v = this.forceInput;
+    this.forceInput = false;
+    return v;
+  }
+
+  /** Consume one-frame E press for interactions. */
   consumeInteractEdge(): boolean {
     const v = this.interactEdge;
     this.interactEdge = false;
@@ -162,6 +193,21 @@ export class FpController {
   predict(dt: number, solids: readonly Aabb[]): void {
     if (this.downed || this.blocked) return;
     const axes = this.getAxes();
+    // No residual motion when keys are up.
+    if (axes.forward === 0 && axes.strafe === 0) {
+      const vert = applyVerticalMovement(
+        this.state.y,
+        this.state.vy,
+        false,
+        dt,
+        this.state.grounded,
+      );
+      this.state.y = vert.y;
+      this.state.vy = vert.vy;
+      this.state.grounded = vert.grounded;
+      return;
+    }
+
     const speed = PLAYER.moveSpeed * (this.isSprinting() ? PLAYER.sprintMul : 1);
     const moved = applyPlayerMovement(
       this.state.x,
@@ -190,25 +236,24 @@ export class FpController {
     this.state.grounded = vert.grounded;
   }
 
-  reconcile(server: { x: number; y: number; z: number }): void {
+  /**
+   * Local player is visual-authority for movement.
+   * Only snap for huge errors (teleport / soft-stuck) — never micro-correct,
+   * or holding W/A/D rubberbands you back toward the lagged server pos.
+   */
+  reconcile(server: { x: number; y: number; z: number }, _localMoving?: boolean): void {
     const dx = server.x - this.state.x;
     const dz = server.z - this.state.z;
     const dist = Math.hypot(dx, dz);
-    // Ignore micro error (tick/dt skew) — prevents constant tiny rubberband.
-    if (dist > 2.8) {
+    const dy = server.y - this.state.y;
+
+    if (dist > 5) {
       this.state.x = server.x;
       this.state.z = server.z;
-    } else if (dist > 0.18) {
-      const t = Math.min(0.28, (dist - 0.18) * 0.35);
-      this.state.x += dx * t;
-      this.state.z += dz * t;
     }
-    const dy = server.y - this.state.y;
-    if (Math.abs(dy) > 1.5) {
+    if (Math.abs(dy) > 3) {
       this.state.y = server.y;
       this.state.vy = 0;
-    } else if (Math.abs(dy) > 0.12) {
-      this.state.y += dy * 0.25;
     }
   }
 
@@ -254,6 +299,14 @@ export class FpController {
 
   private readonly onKeyUp = (e: KeyboardEvent) => {
     this.keys.delete(e.code);
+    if (MOVE_KEYS.has(e.code) || e.code === "ShiftLeft" || e.code === "ShiftRight") {
+      this.forceInput = true;
+    }
+  };
+
+  private readonly onBlur = () => {
+    this.keys.clear();
+    this.forceInput = true;
   };
 
   private readonly onMouseDown = (e: MouseEvent) => {
@@ -280,6 +333,10 @@ export class FpController {
 
   private readonly onLockChange = () => {
     this.locked = document.pointerLockElement === this.canvas;
+    if (!this.locked) {
+      this.keys.clear();
+      this.forceInput = true;
+    }
   };
 
   private readonly onMouseMove = (e: MouseEvent) => {

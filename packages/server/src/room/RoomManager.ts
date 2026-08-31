@@ -103,6 +103,8 @@ export type RoomPlayer = {
   jumpQueued: boolean;
   interactHeld: boolean;
   sprinting: boolean;
+  /** ms epoch of last input packet — stale move axes are cleared. */
+  lastInputAt: number;
   reviveTargetId: string | null;
   reviveProgress: number;
   ready: boolean;
@@ -608,6 +610,7 @@ export class Room {
       jumpQueued: false,
       interactHeld: false,
       sprinting: false,
+      lastInputAt: Date.now(),
       reviveTargetId: null,
       reviveProgress: 0,
       ready: false,
@@ -653,6 +656,7 @@ export class Room {
     player.interactHeld = Boolean(input.interact);
     // Can't sprint on empty hunger.
     player.sprinting = Boolean(input.sprint) && !player.downed && player.hunger > 0;
+    player.lastInputAt = Date.now();
     if (typeof input.selectedSlot === "number") {
       player.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, input.selectedSlot));
     }
@@ -1716,6 +1720,13 @@ export class Room {
       }
 
       this.updateSurvival(player, dt);
+
+      // Drop stale movement if the client stopped sending (or stop packet is late).
+      if (Date.now() - player.lastInputAt > 120) {
+        player.forward = 0;
+        player.strafe = 0;
+        player.sprinting = false;
+      }
 
       const moved = applyPlayerMovement(
         player.x,

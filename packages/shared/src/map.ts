@@ -162,13 +162,13 @@ export function isInsideZombiePen(x: number, z: number): boolean {
   );
 }
 
-/** Spawn inside the safehouse (inside barricades). */
-export const SPAWN_POSITION = { x: 0, y: 0, z: 0 } as const;
+/** Spawn inside the safehouse, clear of the core pillar. */
+export const SPAWN_POSITION = { x: 3.5, y: 0, z: 3.5 } as const;
 
 /** Per-slot offsets so players don't stack on join (inside expanded walls ±8). */
 export const SPAWN_OFFSETS: readonly { x: number; z: number }[] = [
-  { x: 2.2, z: 2.0 },
-  { x: -2.2, z: 2.0 },
-  { x: 2.2, z: -2.0 },
-  { x: -2.2, z: -2.0 },
+  { x: 0, z: 0 },
+  { x: -2.5, z: 0 },
+  { x: 0, z: -2.5 },
+  { x: -2.5, z: -2.5 },
 ];

@@ -21,9 +21,36 @@ export function inflateAabbXZ(box: Aabb, radius: number): Aabb {
   };
 }
 
+/** Push a point out of any overlapping inflated AABB (min translation on XZ). */
+export function resolveCircleAabbOverlap(
+  x: number,
+  z: number,
+  radius: number,
+  solids: readonly Aabb[],
+): { x: number; z: number } {
+  let nx = x;
+  let nz = z;
+  for (const box of solids) {
+    const b = inflateAabbXZ(box, radius);
+    if (nx <= b.minX || nx >= b.maxX || nz <= b.minZ || nz >= b.maxZ) continue;
+
+    const penLeft = nx - b.minX;
+    const penRight = b.maxX - nx;
+    const penDown = nz - b.minZ;
+    const penUp = b.maxZ - nz;
+    const minPen = Math.min(penLeft, penRight, penDown, penUp);
+    if (minPen === penLeft) nx = b.minX;
+    else if (minPen === penRight) nx = b.maxX;
+    else if (minPen === penDown) nz = b.minZ;
+    else nz = b.maxZ;
+  }
+  return { x: nx, z: nz };
+}
+
 /**
  * Move a point in XZ against solid AABBs (capsule approximated as circle in XZ).
- * Separates axes to slide along walls.
+ * Separates axes to slide along walls. Resolves penetration before/after move
+ * so you never get teleported to the opposite face of a volume you're inside.
  */
 export function moveWithAabbCollision(
   x: number,
@@ -33,28 +60,38 @@ export function moveWithAabbCollision(
   radius: number,
   solids: readonly Aabb[],
 ): { x: number; z: number } {
-  let nx = x;
-  let nz = z;
+  // Clear any existing overlap first (spawn / desync).
+  let start = resolveCircleAabbOverlap(x, z, radius, solids);
+  let nx = start.x;
+  let nz = start.z;
 
   if (dx !== 0) {
-    nx = x + dx;
+    const tryX = nx + dx;
+    let blocked = false;
     for (const box of solids) {
       const b = inflateAabbXZ(box, radius);
-      if (nz > b.minZ && nz < b.maxZ && nx > b.minX && nx < b.maxX) {
+      if (nz > b.minZ && nz < b.maxZ && tryX > b.minX && tryX < b.maxX) {
+        blocked = true;
         nx = dx > 0 ? b.minX : b.maxX;
+        break;
       }
     }
+    if (!blocked) nx = tryX;
   }
 
   if (dz !== 0) {
-    nz = z + dz;
+    const tryZ = nz + dz;
+    let blocked = false;
     for (const box of solids) {
       const b = inflateAabbXZ(box, radius);
-      if (nx > b.minX && nx < b.maxX && nz > b.minZ && nz < b.maxZ) {
+      if (nx > b.minX && nx < b.maxX && tryZ > b.minZ && tryZ < b.maxZ) {
+        blocked = true;
         nz = dz > 0 ? b.minZ : b.maxZ;
+        break;
       }
     }
+    if (!blocked) nz = tryZ;
   }
 
-  return { x: nx, z: nz };
+  return resolveCircleAabbOverlap(nx, nz, radius, solids);
 }

@@ -877,7 +877,7 @@ function startGame(
     playerCountEl.textContent = String(msg.players.length);
     const self = msg.players.find((p) => p.id === active.playerId);
     if (self) {
-      fp.reconcile(self);
+      fp.reconcile(self, fp.isMoving());
       fp.setSelectedSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
       updateHungerHud(self.hunger, self.maxHunger);
@@ -927,8 +927,10 @@ function startGame(
     viewmodel.update(dt, moving && !invUi.isOpen);
 
     inputAcc += dt;
-    if (inputAcc >= 1 / 30) {
-      inputAcc = 0;
+    const forceInput = fp.consumeForceInput();
+    if (forceInput || inputAcc >= 1 / 30) {
+      inputAcc = forceInput ? 0 : inputAcc - 1 / 30;
+      if (inputAcc < 0) inputAcc = 0;
       if (!consoleUi.isOpen()) {
         const packet = fp.nextInputPacket();
         if (invUi.isOpen) {
