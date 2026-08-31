@@ -9,7 +9,6 @@ import {
   ITEMS,
   LOOT_SPOTS,
   lootSpotAabbs,
-  M4_AMBIENT,
   MAX_PLAYERS_PER_ROOM,
   PLAYER,
   PLAYER_COLORS,
@@ -25,7 +24,6 @@ import {
   applyVerticalMovement,
   baseFacilityAabbs,
   clampPitch,
-  clampToZombiePen,
   cloneSlots,
   consumeItem,
   countItem,
@@ -42,7 +40,6 @@ import {
   moveToward,
   prepDurationSec,
   quickMoveInto,
-  randomPointInZombiePen,
   raycastCapsuleXZ,
   rollLootStacks,
   startingHotbar,
@@ -120,7 +117,6 @@ export type RoomZombie = {
   yaw: number;
   hp: number;
   attackCd: number;
-  penned: boolean;
 };
 
 type RoomLootNode = {
@@ -211,7 +207,6 @@ export class Room {
   private saveAcc = 0;
 
   private tick = 0;
-  private respawnAcc = 0;
   private readonly timer: ReturnType<typeof setInterval>;
   private onEmpty: ((code: string) => void) | null = null;
   private tickEvents: GameEvent[] = [];
@@ -235,7 +230,7 @@ export class Room {
       }
     }
 
-    this.seedAmbientWalkers(M4_AMBIENT.count);
+    // No ambient zombies — they only appear from invasion waves.
     this.rebuildSolids();
     this.timer = setInterval(() => this.step(), TICK_MS);
   }
@@ -760,7 +755,7 @@ export class Room {
       const dist = wallT !== null ? Math.max(1.5, wallT - 0.6) : 6;
       const x = origin.x + dir.x * dist;
       const z = origin.z + dir.z * dist;
-      this.spawnZombieAt(kind, x, z, false);
+      this.spawnZombieAt(kind, x, z);
       return { ok: true, message: `Spawned ${kind} at look point (~${dist.toFixed(1)}m)` };
     }
 
@@ -955,27 +950,18 @@ export class Room {
     }
   }
 
-  private seedAmbientWalkers(count: number): void {
-    for (let i = 0; i < count; i++) {
-      const pos = randomPointInZombiePen();
-      this.spawnZombieAt("walker", pos.x, pos.z, true);
-    }
-  }
-
-  private spawnZombieAt(kind: ZombieTypeId, x: number, z: number, penned: boolean): void {
+  private spawnZombieAt(kind: ZombieTypeId, x: number, z: number): void {
     const def = ZOMBIE_DEFS[kind];
     const id = `z${nextZombieSeq++}`;
-    const pos = penned ? clampToZombiePen(x, z) : { x, z };
     this.zombies.set(id, {
       id,
       kind,
-      x: pos.x,
+      x,
       y: 0,
-      z: pos.z,
+      z,
       yaw: 0,
       hp: def.maxHp,
       attackCd: 0,
-      penned,
     });
   }
 
@@ -1369,10 +1355,8 @@ export class Room {
     for (const p of this.players.values()) p.ready = false;
   }
 
-  private wipeNonPennedZombies(): void {
-    for (const [id, z] of this.zombies) {
-      if (!z.penned) this.zombies.delete(id);
-    }
+  private clearInvasionZombies(): void {
+    this.zombies.clear();
   }
 
   private enterWarning(): void {
@@ -1414,7 +1398,7 @@ export class Room {
     for (const spawn of spawns) {
       for (let i = 0; i < spawn.count; i++) {
         const pos = invasionSpawnPoint(slot++);
-        this.spawnZombieAt(spawn.kind, pos.x, pos.z, false);
+        this.spawnZombieAt(spawn.kind, pos.x, pos.z);
       }
     }
     if (w >= this.wavesTotal - 1) {
@@ -1423,15 +1407,11 @@ export class Room {
   }
 
   private countInvasionZombies(): number {
-    let n = 0;
-    for (const z of this.zombies.values()) {
-      if (!z.penned) n += 1;
-    }
-    return n;
+    return this.zombies.size;
   }
 
   private resolveInvasionWin(): void {
-    this.wipeNonPennedZombies();
+    this.clearInvasionZombies();
     const scrap =
       INVASION.rewardScrap + this.invasionIndex * INVASION.rewardScrapPerIndex;
     const ammo = INVASION.rewardAmmo;
@@ -1462,7 +1442,7 @@ export class Room {
   }
 
   private invasionLost(): void {
-    this.wipeNonPennedZombies();
+    this.clearInvasionZombies();
 
     for (const wall of this.walls.values()) {
       const maxHp = wallTierDef(wall.tier).maxHp;
@@ -1593,8 +1573,7 @@ export class Room {
     const def = ZOMBIE_DEFS[zombie.kind];
     if (zombie.attackCd > 0) zombie.attackCd = Math.max(0, zombie.attackCd - dt);
 
-    const siege =
-      !zombie.penned && (this.phase === "waves" || this.phase === "warning");
+    const siege = this.phase === "waves" || this.phase === "warning";
 
     if (siege) {
       const target = this.nearestPlayer(zombie.x, zombie.z, def.aggroRange);
@@ -1691,11 +1670,6 @@ export class Room {
       }
     }
 
-    if (zombie.penned) {
-      const c = clampToZombiePen(zombie.x, zombie.z);
-      zombie.x = c.x;
-      zombie.z = c.z;
-    }
   }
 
   private step(): void {
@@ -1767,18 +1741,6 @@ export class Room {
 
     for (const zombie of this.zombies.values()) {
       this.updateZombieAi(zombie, dt);
-    }
-
-    const pennedCount = [...this.zombies.values()].filter((z) => z.penned).length;
-    if (pennedCount < M4_AMBIENT.minAlive) {
-      this.respawnAcc += dt;
-      if (this.respawnAcc >= M4_AMBIENT.respawnDelaySec) {
-        this.respawnAcc = 0;
-        const pos = randomPointInZombiePen();
-        this.spawnZombieAt("walker", pos.x, pos.z, true);
-      }
-    } else {
-      this.respawnAcc = 0;
     }
 
     this.updateInvasion(dt);

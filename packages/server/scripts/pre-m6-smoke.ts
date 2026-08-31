@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { COMBAT, ZOMBIE_PEN } from "@coop/shared";
+import { COMBAT } from "@coop/shared";
 
 function connect(): Promise<WebSocket> {
   return new Promise((res, rej) => {
@@ -30,17 +30,10 @@ async function main() {
   a.send(JSON.stringify({ type: "createRoom", name: "DevHost" }));
   const joined = await wait(a, "roomJoined");
   console.log("zombies", joined.zombies.length);
-
-  // All ambient should be in pen
-  for (const z of joined.zombies) {
-    const inside =
-      z.x >= ZOMBIE_PEN.minX &&
-      z.x <= ZOMBIE_PEN.maxX &&
-      z.z >= ZOMBIE_PEN.minZ &&
-      z.z <= ZOMBIE_PEN.maxZ;
-    if (!inside) throw new Error(`zombie outside pen ${z.x},${z.z}`);
+  if (joined.zombies.length !== 0) {
+    throw new Error(`expected 0 zombies before invasion, got ${joined.zombies.length}`);
   }
-  console.log("PASS pen containment on spawn");
+  console.log("PASS no ambient zombies before ready");
 
   // Jump
   a.send(JSON.stringify({ type: "input", seq: 1, forward: 0, strafe: 0, yaw: 0, pitch: 0, jump: true }));

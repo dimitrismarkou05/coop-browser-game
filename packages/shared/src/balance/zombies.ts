@@ -56,9 +56,3 @@ export const ZOMBIE_DEFS: Record<ZombieTypeId, ZombieDef> = {
   },
 };
 
-/** Ambient walkers quarantined in the pen. */
-export const M4_AMBIENT = {
-  count: 10,
-  respawnDelaySec: 4,
-  minAlive: 6,
-} as const;

@@ -1,9 +1,7 @@
 import {
   MAP,
   PLACEHOLDER_BUILDINGS,
-  ZOMBIE_PEN,
   createBoundaryWalls,
-  createZombiePenVisuals,
   type Aabb,
 } from "@coop/shared";
 import * as THREE from "three";
@@ -49,23 +47,6 @@ export function buildPlaceholderWorld(scene: THREE.Scene): void {
     const opacity = building.solid === false ? 0.85 : 1;
     scene.add(aabbToMesh(building.box, building.color, opacity));
   }
-
-  for (const fence of createZombiePenVisuals()) {
-    scene.add(aabbToMesh(fence.box, fence.color, 0.92));
-  }
-
-  // Pen floor tint so the quarantine zone reads clearly.
-  const pen = new THREE.Mesh(
-    new THREE.PlaneGeometry(ZOMBIE_PEN.maxX - ZOMBIE_PEN.minX, ZOMBIE_PEN.maxZ - ZOMBIE_PEN.minZ),
-    new THREE.MeshStandardMaterial({ color: 0x3a2218, roughness: 0.95 }),
-  );
-  pen.rotation.x = -Math.PI / 2;
-  pen.position.set(
-    (ZOMBIE_PEN.minX + ZOMBIE_PEN.maxX) / 2,
-    0.02,
-    (ZOMBIE_PEN.minZ + ZOMBIE_PEN.maxZ) / 2,
-  );
-  scene.add(pen);
 
   for (const wall of createBoundaryWalls()) {
     scene.add(aabbToMesh(wall, 0x3a4250, 0.55));

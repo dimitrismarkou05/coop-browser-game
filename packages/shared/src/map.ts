@@ -78,48 +78,6 @@ export const PLACEHOLDER_BUILDINGS: readonly MapBuilding[] = [
   },
 ];
 
-/**
- * Quarantine pen south of town. Ambient zombies spawn and stay here.
- * North wall has a player walkway gap; zombies are soft-clamped inside.
- */
-export const ZOMBIE_PEN = {
-  minX: -14,
-  maxX: 14,
-  minZ: -38,
-  maxZ: -22,
-  /** Inset used when clamping zombies so they don't sit in the fence. */
-  pad: 1.2,
-} as const;
-
-export function createZombiePenFences(): Aabb[] {
-  const { minX, maxX, minZ, maxZ } = ZOMBIE_PEN;
-  const t = 0.6;
-  const h = 3.2;
-  /** Wide enough for players (radius + inflate) to walk in from the north. */
-  const gateGap = 5.5;
-  const mid = (minX + maxX) / 2;
-  return [
-    // South
-    { minX: minX - t, maxX: maxX + t, minY: 0, maxY: h, minZ: minZ - t, maxZ: minZ },
-    // East / West
-    { minX: maxX, maxX: maxX + t, minY: 0, maxY: h, minZ: minZ, maxZ: maxZ },
-    { minX: minX - t, maxX: minX, minY: 0, maxY: h, minZ: minZ, maxZ: maxZ },
-    // North split around gate gap
-    { minX: minX - t, maxX: mid - gateGap / 2, minY: 0, maxY: h, minZ: maxZ, maxZ: maxZ + t },
-    { minX: mid + gateGap / 2, maxX: maxX + t, minY: 0, maxY: h, minZ: maxZ, maxZ: maxZ + t },
-  ];
-}
-
-export function createZombiePenVisuals(): MapBuilding[] {
-  return createZombiePenFences().map((box, i) => ({
-    id: `pen-fence-${i}`,
-    label: "Quarantine fence",
-    color: 0x6b2a2a,
-    box,
-    solid: true,
-  }));
-}
-
 /** Outer walls so you can't walk off the map. */
 export function createBoundaryWalls(half = MAP.halfExtent): Aabb[] {
   const t = 1;
@@ -134,32 +92,7 @@ export function createBoundaryWalls(half = MAP.halfExtent): Aabb[] {
 
 export function getSolidAabbs(): Aabb[] {
   const buildings = PLACEHOLDER_BUILDINGS.filter((b) => b.solid !== false).map((b) => b.box);
-  return [...buildings, ...createZombiePenFences(), ...createBoundaryWalls()];
-}
-
-export function clampToZombiePen(x: number, z: number): { x: number; z: number } {
-  const p = ZOMBIE_PEN.pad;
-  return {
-    x: Math.min(ZOMBIE_PEN.maxX - p, Math.max(ZOMBIE_PEN.minX + p, x)),
-    z: Math.min(ZOMBIE_PEN.maxZ - p, Math.max(ZOMBIE_PEN.minZ + p, z)),
-  };
-}
-
-export function randomPointInZombiePen(): { x: number; z: number } {
-  const p = ZOMBIE_PEN.pad + 0.5;
-  return {
-    x: ZOMBIE_PEN.minX + p + Math.random() * (ZOMBIE_PEN.maxX - ZOMBIE_PEN.minX - 2 * p),
-    z: ZOMBIE_PEN.minZ + p + Math.random() * (ZOMBIE_PEN.maxZ - ZOMBIE_PEN.minZ - 2 * p),
-  };
-}
-
-export function isInsideZombiePen(x: number, z: number): boolean {
-  return (
-    x >= ZOMBIE_PEN.minX &&
-    x <= ZOMBIE_PEN.maxX &&
-    z >= ZOMBIE_PEN.minZ &&
-    z <= ZOMBIE_PEN.maxZ
-  );
+  return [...buildings, ...createBoundaryWalls()];
 }
 
 /** Spawn inside the safehouse, clear of the core pillar. */
