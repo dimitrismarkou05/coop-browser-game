@@ -41,7 +41,11 @@ export class ClientSocket {
 
   private connect(): void {
     if (this.disposed) return;
-    const url = `ws://localhost:${DEFAULT_SERVER_PORT}`;
+    const fromEnv = import.meta.env.VITE_WS_URL as string | undefined;
+    const url =
+      fromEnv && fromEnv.length > 0
+        ? fromEnv
+        : `ws://localhost:${DEFAULT_SERVER_PORT}`;
     this.handlers.onStatus("Connecting…", "connecting");
     const ws = new WebSocket(url);
     this.ws = ws;
