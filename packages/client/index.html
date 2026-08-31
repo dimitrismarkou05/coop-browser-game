@@ -413,15 +413,15 @@
       #vitals {
         position: fixed;
         left: 50%;
-        bottom: 84px;
+        bottom: 80px;
         transform: translateX(-50%);
         z-index: 14;
         display: none;
         flex-direction: row;
         justify-content: space-between;
-        align-items: center;
-        gap: 24px;
-        width: calc(6 * var(--slot) + 5 * 4px + 12px);
+        align-items: flex-end;
+        gap: 12px;
+        width: calc(6 * var(--slot) + 5 * 4px);
         padding: 0;
         background: transparent;
         border: none;
@@ -434,16 +434,19 @@
       #food-icons {
         display: flex;
         flex-direction: row;
-        gap: 2px;
+        gap: 3px;
+        width: calc(3 * var(--slot) + 2 * 4px);
       }
       #food-icons {
         flex-direction: row-reverse;
+        justify-content: flex-start;
       }
       .mc-pip {
-        width: 18px;
-        height: 18px;
+        width: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5);
+        height: calc((3 * var(--slot) + 2 * 4px - 4 * 3px) / 5);
         image-rendering: pixelated;
         flex-shrink: 0;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65));
       }
       .inv-slot {
         width: var(--slot);
