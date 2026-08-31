@@ -10,28 +10,40 @@ SQLite world saves live on the container disk and are **ephemeral** on free Belm
 2. Sign up at [belmo.io](https://belmo.io) (no credit card on Starter).
 3. **New service → API** (or Docker if the UI offers a Dockerfile path).
 4. Connect this repo and branch (usually `main`).
-5. Prefer **Dockerfile** at the repo root (`Dockerfile`). Belmo should detect it and build the image.
-6. If using buildpack instead of Docker, set:
+5. Belmo (Coolify) usually builds with **Nixpacks**, not the root `Dockerfile`. Repo root has [`nixpacks.toml`](nixpacks.toml) so install/build/start are correct.
+6. In the service settings, leave custom build/start **empty** to use `nixpacks.toml`, **or** set explicitly:
    - **Root directory:** repo root (not `packages/server`)
-   - **Build command:** `npm ci && npm run build -w @coop/shared && npm run build -w @coop/server`
+   - **Build command:** `npm run build -w @coop/shared && npm run build -w @coop/server`  
+     (do **not** put `npm ci` here — Nixpacks already installs; a second `npm ci` fails with `EBUSY` on `node_modules/.cache`)
    - **Start command:** `npm run start -w @coop/server`
-7. Deploy. Belmo injects `PORT`; the server already binds to `process.env.PORT`.
-8. Copy the public URL, e.g. `https://your-service.app.belmo.io`.
+7. If the UI lets you pick a pack: prefer **Nixpacks**. Only switch to **Dockerfile** if Nixpacks cannot compile `better-sqlite3`.
+8. Deploy. Belmo injects `PORT`; the server already binds to `process.env.PORT`.
+9. Copy the public URL, e.g. `https://coop-browser-game-xxxx.onbelmo.uk`.
 
 ### Health check
 
 ```bash
-curl -sS https://your-service.app.belmo.io/
+curl -sS https://coop-browser-game-xxxx.onbelmo.uk/
 # expect: {"ok":true,"milestone":...}
 ```
 
-WebSocket URL for the client:
+WebSocket URL for the client (same host, `wss://` scheme):
 
 ```text
-wss://your-service.app.belmo.io
+wss://coop-browser-game-xxxx.onbelmo.uk
 ```
 
-(Same host as HTTPS; use the `wss://` scheme.)
+### Belmo build failure: `EBUSY ... rmdir '/app/node_modules/.cache'`
+
+Cause: custom **Build** still includes `npm ci`. Nixpacks already ran `npm ci` in install and mounts a cache on `node_modules/.cache`.
+
+Fix: set Build to only:
+
+```text
+npm run build -w @coop/shared && npm run build -w @coop/server
+```
+
+Then redeploy (after pushing `nixpacks.toml` if you rely on the file instead of the UI).
 
 ### Local Docker smoke (optional)
 
