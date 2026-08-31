@@ -40,6 +40,7 @@ export class InventoryUi {
   private readonly invGrid: HTMLElement;
   private readonly panelHotbarGrid: HTMLElement;
   private readonly hudHotbar: HTMLElement;
+  private readonly vitalsEl: HTMLElement;
   private readonly ghost: HTMLElement;
   private mode: InvUiMode = "closed";
   private lootId: string | null = null;
@@ -58,6 +59,7 @@ export class InventoryUi {
     this.invGrid = document.getElementById("inv-player-grid")!;
     this.panelHotbarGrid = document.getElementById("inv-hotbar-grid")!;
     this.hudHotbar = document.getElementById("hotbar")!;
+    this.vitalsEl = document.getElementById("vitals")!;
     this.ghost = document.getElementById("inv-ghost")!;
 
     document.addEventListener("mousemove", this.onMouseMove);
@@ -116,6 +118,7 @@ export class InventoryUi {
     this.containerGrid.style.display = "none";
     this.root.classList.add("open");
     this.hudHotbar.classList.remove("visible");
+    this.vitalsEl.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -129,6 +132,7 @@ export class InventoryUi {
     this.containerGrid.style.display = "grid";
     this.root.classList.add("open");
     this.hudHotbar.classList.remove("visible");
+    this.vitalsEl.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -143,6 +147,7 @@ export class InventoryUi {
     this.containerGrid.style.display = "grid";
     this.root.classList.add("open");
     this.hudHotbar.classList.remove("visible");
+    this.vitalsEl.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -155,6 +160,7 @@ export class InventoryUi {
     this.ghost.classList.remove("on");
     this.root.classList.remove("open");
     this.hudHotbar.classList.add("visible");
+    this.vitalsEl.classList.add("visible");
     this.opts.onOpenChange(false);
     this.opts.onClose();
     this.renderHotbars();

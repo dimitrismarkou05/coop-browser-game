@@ -410,6 +410,74 @@
       #hotbar.visible {
         display: grid;
       }
+      #vitals {
+        position: fixed;
+        left: 50%;
+        bottom: 88px;
+        transform: translateX(-50%);
+        z-index: 14;
+        display: none;
+        flex-direction: column;
+        gap: 6px;
+        width: min(340px, calc(100vw - 24px));
+        padding: 8px 10px;
+        background: rgba(13, 17, 23, 0.82);
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        pointer-events: none;
+      }
+      #vitals.visible {
+        display: flex;
+      }
+      #vitals .vital-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #vitals .vital-label {
+        width: 42px;
+        font-size: 11px;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      #vitals .vital-bar {
+        flex: 1;
+        height: 10px;
+        border-radius: 999px;
+        background: #21262d;
+        overflow: hidden;
+        border: 1px solid #30363d;
+      }
+      #vitals .vital-fill {
+        height: 100%;
+        width: 100%;
+        transition: width 0.1s linear;
+      }
+      #vitals #hp-fill {
+        background: #3d9a5f;
+      }
+      #vitals #hp-fill.hurt {
+        background: #d29922;
+      }
+      #vitals #hp-fill.critical {
+        background: #f85149;
+      }
+      #hunger-fill {
+        background: #c4a35a;
+      }
+      #hunger-fill.low {
+        background: #db6d28;
+      }
+      #hunger-fill.critical {
+        background: #f85149;
+      }
+      #vitals .vital-text {
+        width: 64px;
+        font-size: 12px;
+        text-align: right;
+        color: #e6edf3;
+      }
       .inv-slot {
         width: var(--slot);
         height: var(--slot);
@@ -508,7 +576,9 @@
         letter-spacing: 0.04em;
       }
       #inv-ui.open ~ #hotbar,
-      body:has(#inv-ui.open) #hotbar {
+      #inv-ui.open ~ #vitals,
+      body:has(#inv-ui.open) #hotbar,
+      body:has(#inv-ui.open) #vitals {
         display: none !important;
       }
       .inv-empty {
@@ -575,17 +645,24 @@
       <div id="rtt">—</div>
       <div class="label" style="margin-top: 8px">Players</div>
       <div id="player-count">—</div>
-      <div class="label" style="margin-top: 8px">Health</div>
-      <div id="hp-row">
-        <div id="hp-bar"><div id="hp-fill"></div></div>
-        <div id="hp-text">—</div>
-      </div>
       <div class="label" style="margin-top: 8px">Ammo</div>
       <div id="ammo">—</div>
       <div class="label" style="margin-top: 8px">Zombies</div>
       <div id="zombie-count">—</div>
       <div class="label" style="margin-top: 8px">Controls</div>
       <div id="hint">Click the game to capture mouse</div>
+    </div>
+    <div id="vitals">
+      <div class="vital-row">
+        <div class="vital-label">HP</div>
+        <div class="vital-bar"><div id="hp-fill" class="vital-fill"></div></div>
+        <div id="hp-text" class="vital-text">—</div>
+      </div>
+      <div class="vital-row">
+        <div class="vital-label">Food</div>
+        <div class="vital-bar"><div id="hunger-fill" class="vital-fill"></div></div>
+        <div id="hunger-text" class="vital-text">—</div>
+      </div>
     </div>
     <div id="hotbar"></div>
     <div id="inv-ui">

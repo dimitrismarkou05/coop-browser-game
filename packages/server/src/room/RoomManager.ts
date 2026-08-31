@@ -12,6 +12,7 @@ import {
   SPAWN_OFFSETS,
   SPAWN_POSITION,
   STORAGE_POS,
+  SURVIVAL,
   TICK_MS,
   WEAPONS,
   ZOMBIE_DEFS,
@@ -66,12 +67,13 @@ export type RoomPlayer = {
   hotbar: Slot[];
   inventory: Slot[];
   selectedSlot: number;
+  hunger: number;
   downed: boolean;
   bleedout: number;
   iFrames: number;
   weaponCd: number;
-  shootQueued: boolean;
-  meleeQueued: boolean;
+  /** LMB primary: shoot / melee / eat. */
+  useQueued: boolean;
   jumpQueued: boolean;
   interactHeld: boolean;
   sprinting: boolean;
@@ -177,12 +179,12 @@ export class Room {
       hotbar: startingHotbar(),
       inventory: startingInventory(),
       selectedSlot: 0,
+      hunger: SURVIVAL.startingHunger,
       downed: false,
       bleedout: 0,
       iFrames: PLAYER.respawnIFrames,
       weaponCd: 0,
-      shootQueued: false,
-      meleeQueued: false,
+      useQueued: false,
       jumpQueued: false,
       interactHeld: false,
       sprinting: false,
@@ -224,11 +226,11 @@ export class Room {
     player.strafe = Math.max(-1, Math.min(1, input.strafe));
     player.yaw = input.yaw;
     player.pitch = clampPitch(input.pitch);
-    if (input.shoot) player.shootQueued = true;
-    if (input.melee) player.meleeQueued = true;
+    if (input.shoot) player.useQueued = true;
     if (input.jump) player.jumpQueued = true;
     player.interactHeld = Boolean(input.interact);
-    player.sprinting = Boolean(input.sprint) && !player.downed;
+    // Can't sprint on empty hunger.
+    player.sprinting = Boolean(input.sprint) && !player.downed && player.hunger > 0;
     if (typeof input.selectedSlot === "number") {
       player.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, input.selectedSlot));
     }
@@ -420,6 +422,8 @@ export class Room {
       hotbar: cloneSlots(p.hotbar),
       inventory: cloneSlots(p.inventory),
       selectedSlot: p.selectedSlot,
+      hunger: p.hunger,
+      maxHunger: SURVIVAL.maxHunger,
       downed: p.downed,
       bleedout: p.bleedout,
       reviveProgress: Math.min(1, p.reviveProgress / COMBAT.reviveDuration),
@@ -566,9 +570,9 @@ export class Room {
     player.vy = 0;
     player.y = 0;
     player.grounded = true;
-    player.shootQueued = false;
-    player.meleeQueued = false;
+    player.useQueued = false;
     player.jumpQueued = false;
+    player.sprinting = false;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
     this.tickEvents.push({ kind: "down", playerId: player.id });
@@ -583,6 +587,7 @@ export class Room {
     player.vy = 0;
     player.grounded = true;
     player.hp = player.maxHp;
+    player.hunger = Math.max(player.hunger, SURVIVAL.hpRegenMinHunger);
     player.downed = false;
     player.bleedout = 0;
     player.iFrames = PLAYER.respawnIFrames;
@@ -604,6 +609,43 @@ export class Room {
       return true;
     }
     return false;
+  }
+
+  /** LMB: eat food, fire gun, or melee (empty / melee weapon). */
+  private tryUse(player: RoomPlayer): void {
+    const stack = this.selectedItem(player);
+
+    if (stack?.id === "food") {
+      this.tryEat(player);
+      return;
+    }
+    if (stack && ITEMS[stack.id].kind === "gun") {
+      this.tryShoot(player);
+      return;
+    }
+    // Empty slot, melee weapon, or non-usable resource → melee (resources do nothing)
+    if (!stack || ITEMS[stack.id].kind === "melee") {
+      this.tryMelee(player);
+    }
+  }
+
+  private tryEat(player: RoomPlayer): void {
+    const stack = this.selectedItem(player);
+    if (!stack || stack.id !== "food") return;
+    if (player.weaponCd > 0) return;
+    if (player.hunger >= SURVIVAL.maxHunger - 1e-6) return;
+
+    stack.count -= 1;
+    if (stack.count <= 0) player.hotbar[player.selectedSlot] = null;
+
+    const before = player.hunger;
+    player.hunger = Math.min(SURVIVAL.maxHunger, player.hunger + SURVIVAL.foodRestore);
+    player.weaponCd = SURVIVAL.eatCooldown;
+    this.tickEvents.push({
+      kind: "eat",
+      playerId: player.id,
+      restored: player.hunger - before,
+    });
   }
 
   private tryShoot(player: RoomPlayer): void {
@@ -713,6 +755,21 @@ export class Room {
     }
   }
 
+  private updateSurvival(player: RoomPlayer, dt: number): void {
+    if (player.downed) return;
+
+    let drain = SURVIVAL.hungerDrainPerSec;
+    if (player.sprinting && (player.forward !== 0 || player.strafe !== 0)) {
+      drain += SURVIVAL.hungerSprintDrainPerSec;
+    }
+    player.hunger = Math.max(0, player.hunger - drain * dt);
+    if (player.hunger <= 0) player.sprinting = false;
+
+    if (player.hunger >= SURVIVAL.hpRegenMinHunger && player.hp < player.maxHp) {
+      player.hp = Math.min(player.maxHp, player.hp + SURVIVAL.hpRegenPerSec * dt);
+    }
+  }
+
   private updateRevive(player: RoomPlayer, dt: number): void {
     if (player.downed || !player.interactHeld) {
       player.reviveProgress = 0;
@@ -776,14 +833,16 @@ export class Room {
       if (player.downed) {
         player.forward = 0;
         player.strafe = 0;
-        player.shootQueued = false;
-        player.meleeQueued = false;
+        player.useQueued = false;
         player.jumpQueued = false;
+        player.sprinting = false;
         player.y = 0;
         player.vy = 0;
         player.grounded = true;
         continue;
       }
+
+      this.updateSurvival(player, dt);
 
       const moved = applyPlayerMovement(
         player.x,
@@ -806,13 +865,9 @@ export class Room {
       player.vy = vert.vy;
       player.grounded = vert.grounded;
 
-      if (player.shootQueued) {
-        player.shootQueued = false;
-        this.tryShoot(player);
-      }
-      if (player.meleeQueued) {
-        player.meleeQueued = false;
-        this.tryMelee(player);
+      if (player.useQueued) {
+        player.useQueued = false;
+        this.tryUse(player);
       }
 
       this.updateRevive(player, dt);

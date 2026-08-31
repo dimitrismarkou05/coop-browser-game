@@ -92,3 +92,20 @@ export const COMBAT = {
   bleedoutSeconds: 28,
   downedMoveMul: 0,
 } as const;
+
+/** Hunger / passive regen (food is the stamina meter). */
+export const SURVIVAL = {
+  maxHunger: 100,
+  startingHunger: 100,
+  /** Passive hunger drain / sec (walk & idle share this — walking does not add extra). */
+  hungerDrainPerSec: 0.4,
+  /** Extra hunger drain / sec while sprinting. */
+  hungerSprintDrainPerSec: 3.2,
+  /** HP restored / sec when hunger is high enough. */
+  hpRegenPerSec: 5,
+  /** Need at least this much hunger (absolute) to regen HP. */
+  hpRegenMinHunger: 50,
+  /** Hunger restored per food item eaten. */
+  foodRestore: 32,
+  eatCooldown: 0.55,
+} as const;

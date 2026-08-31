@@ -337,6 +337,7 @@ export function startingHotbar(): Slot[] {
   const slots = emptySlots(INV.hotbarSize);
   slots[0] = { id: "pistol", count: 1 };
   slots[1] = { id: "ammo", count: 24 };
+  slots[2] = { id: "food", count: 3 };
   return slots;
 }
 

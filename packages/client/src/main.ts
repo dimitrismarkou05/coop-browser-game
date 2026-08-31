@@ -36,6 +36,7 @@ const btnCreate = document.getElementById("btn-create") as HTMLButtonElement;
 const btnJoin = document.getElementById("btn-join") as HTMLButtonElement;
 
 const hudEl = document.getElementById("hud")!;
+const vitalsEl = document.getElementById("vitals")!;
 const hotbarEl = document.getElementById("hotbar")!;
 const crosshairEl = document.getElementById("crosshair")!;
 const hurtFlashEl = document.getElementById("hurt-flash")!;
@@ -55,6 +56,8 @@ const playerCountEl = document.getElementById("player-count")!;
 const zombieCountEl = document.getElementById("zombie-count")!;
 const hpFillEl = document.getElementById("hp-fill")!;
 const hpTextEl = document.getElementById("hp-text")!;
+const hungerFillEl = document.getElementById("hunger-fill")!;
+const hungerTextEl = document.getElementById("hunger-text")!;
 const ammoEl = document.getElementById("ammo")!;
 const hintEl = document.getElementById("hint")!;
 
@@ -119,6 +122,14 @@ function updateHpHud(hp: number, maxHp: number): void {
   lastKnownHp = hp;
 }
 
+function updateHungerHud(hunger: number, maxHunger: number): void {
+  const pct = Math.max(0, Math.min(100, (hunger / maxHunger) * 100));
+  hungerFillEl.style.width = `${pct}%`;
+  hungerTextEl.textContent = `${Math.round(hunger)} / ${maxHunger}`;
+  hungerFillEl.classList.toggle("critical", pct < 25);
+  hungerFillEl.classList.toggle("low", pct >= 25 && pct < 50);
+}
+
 function flashHitMarker(): void {
   hitMarkerEl.classList.add("on");
   window.setTimeout(() => hitMarkerEl.classList.remove("on"), 120);
@@ -146,8 +157,8 @@ function handleEvents(
     if (ev.kind === "melee" && ev.playerId === you) {
       viewmodel?.playMelee();
     }
-    if (ev.kind === "lootOpen" && ev.playerId === you) {
-      flashLootToast("Loot container opened");
+    if (ev.kind === "eat" && ev.playerId === you) {
+      flashLootToast(`Ate food (+${Math.round(ev.restored)} hunger)`);
     }
   }
 }
@@ -220,6 +231,7 @@ function enterWorld(
   if (!session) return;
   lobbyEl.classList.add("hidden");
   hudEl.classList.add("visible");
+  vitalsEl.classList.add("visible");
   hotbarEl.classList.add("visible");
   crosshairEl.classList.add("visible");
   roomCodeEl.textContent = session.code;
@@ -230,6 +242,7 @@ function enterWorld(
   const me = players.find((p) => p.id === session!.playerId);
   lastKnownHp = me?.hp ?? PLAYER.maxHp;
   updateHpHud(me?.hp ?? PLAYER.maxHp, me?.maxHp ?? PLAYER.maxHp);
+  updateHungerHud(me?.hunger ?? 100, me?.maxHunger ?? 100);
   ammoEl.textContent = String(me?.ammo ?? 0);
 
   if (game) game.dispose();
@@ -514,6 +527,7 @@ function startGame(
       fp.reconcile(self);
       fp.setSelectedSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
+      updateHungerHud(self.hunger, self.maxHunger);
       ammoEl.textContent = String(self.ammo);
       const active = self.hotbar[self.selectedSlot];
       viewmodel.setItem(active?.id ?? null);
@@ -569,6 +583,7 @@ function startGame(
           packet.jump = false;
           packet.forward = 0;
           packet.strafe = 0;
+          packet.sprint = false;
         }
         invUi.setSelectedSlot(packet.selectedSlot);
         net.sendInput(packet);
@@ -595,7 +610,7 @@ function startGame(
           ? "Click the game to capture mouse"
           : fp.isSprinting()
             ? "Sprinting · release Shift to walk"
-            : "1–6 hotbar · Shift sprint · E inventory · LMB shoot · F melee · Space jump · ` console";
+            : "1–6 hotbar · Shift sprint · E inventory · LMB use (shoot/melee/eat) · Space jump · ` console";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
@@ -621,6 +636,7 @@ function startGame(
       downedBannerEl.classList.remove("visible");
       lootToastEl.classList.remove("on");
       hotbarEl.classList.remove("visible");
+      vitalsEl.classList.remove("visible");
     },
   };
 }

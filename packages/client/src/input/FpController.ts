@@ -21,8 +21,7 @@ export class FpController {
   private readonly keys = new Set<string>();
   private locked = false;
   private seq = 0;
-  private shootEdge = false;
-  private meleeEdge = false;
+  private useEdge = false;
   private jumpEdge = false;
   private interactEdge = false;
   private downed = false;
@@ -126,11 +125,9 @@ export class FpController {
     sprint: boolean;
   } {
     const axes = this.getAxes();
-    const shoot = this.shootEdge;
-    const melee = this.meleeEdge;
+    const shoot = this.useEdge;
     const jump = this.jumpEdge;
-    this.shootEdge = false;
-    this.meleeEdge = false;
+    this.useEdge = false;
     this.jumpEdge = false;
     if (this.slotEdge !== null) {
       this.selectedSlot = this.slotEdge;
@@ -144,7 +141,7 @@ export class FpController {
       yaw: this.state.yaw,
       pitch: this.state.pitch,
       shoot,
-      melee,
+      melee: false,
       interact: this.isInteractHeld(),
       jump,
       selectedSlot: this.selectedSlot,
@@ -216,7 +213,6 @@ export class FpController {
         "ArrowLeft",
         "ArrowRight",
         "KeyE",
-        "KeyF",
         "Space",
         "ShiftLeft",
         "ShiftRight",
@@ -234,9 +230,6 @@ export class FpController {
       this.interactEdge = true;
     }
     if (this.blocked) return;
-    if (e.code === "KeyF" && !e.repeat && !this.downed) {
-      this.meleeEdge = true;
-    }
     if (e.code === "Space" && !e.repeat && !this.downed) {
       this.jumpEdge = true;
     }
@@ -254,7 +247,7 @@ export class FpController {
   private readonly onMouseDown = (e: MouseEvent) => {
     if (!this.locked || this.downed || this.blocked) return;
     if (e.button === 0) {
-      this.shootEdge = true;
+      this.useEdge = true;
     }
   };
 

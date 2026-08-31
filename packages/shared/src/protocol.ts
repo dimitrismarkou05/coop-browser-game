@@ -19,6 +19,8 @@ export type PlayerSnapshot = {
   hotbar: Slot[];
   inventory: Slot[];
   selectedSlot: number;
+  hunger: number;
+  maxHunger: number;
   downed: boolean;
   bleedout: number;
   /** 0–1 progress while this player is performing a revive. */
@@ -55,6 +57,7 @@ export type GameEvent =
   | { kind: "down"; playerId: string }
   | { kind: "revive"; playerId: string; by: string }
   | { kind: "lootOpen"; playerId: string; spotId: string }
+  | { kind: "eat"; playerId: string; restored: number }
   | { kind: "dev"; message: string };
 
 export type SlotRef = {
