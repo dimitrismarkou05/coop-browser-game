@@ -18,6 +18,7 @@ import {
   STORAGE_POS,
   SURVIVAL,
   STALE_INPUT_MS,
+  TICK_HZ,
   TICK_MS,
   WALL_IDS,
   WEAPONS,
@@ -211,6 +212,7 @@ export class Room {
   private saveAcc = 0;
 
   private tick = 0;
+  private readonly startedAt = Date.now();
   private readonly timer: ReturnType<typeof setInterval>;
   private onEmpty: ((code: string) => void) | null = null;
   private tickEvents: GameEvent[] = [];
@@ -840,11 +842,36 @@ export class Room {
       };
     }
 
+    if (cmd === "time") {
+      const now = Date.now();
+      const inputAge = now - player.lastInputAt;
+      const uptimeSec = ((now - this.startedAt) / 1000).toFixed(1);
+      const phaseLeft =
+        this.phase === "prep" ? "∞" : `${Math.max(0, this.phaseTimer).toFixed(2)}s`;
+      return {
+        ok: true,
+        message: [
+          `epoch=${now}`,
+          `iso=${new Date(now).toISOString()}`,
+          `uptime=${uptimeSec}s`,
+          `simTick=${this.tick}`,
+          `tickHz=${TICK_HZ}`,
+          `tickMs=${TICK_MS.toFixed(2)}`,
+          `phase=${this.phase}`,
+          `wave=${this.invasionIndex + 1}`,
+          `phaseLeft=${phaseLeft}`,
+          `lastInput=${inputAge}ms`,
+          `players=${this.players.size}`,
+          `zombies=${this.zombies.size}`,
+        ].join(" · "),
+      };
+    }
+
     if (cmd === "help") {
       return {
         ok: true,
         message:
-          "spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies | invasion start | invasion skip | give wood|scrap <n>",
+          "time | time watch [sec] | spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies | invasion start | invasion skip | give wood|scrap <n>",
       };
     }
 

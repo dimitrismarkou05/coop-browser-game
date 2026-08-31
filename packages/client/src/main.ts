@@ -493,7 +493,18 @@ function startGame(
   });
 
   const consoleUi = new DevConsole({
-    onSubmit: (line) => net.sendDev(line),
+    onSubmit: (line) => {
+      const cmd = line.trim().toLowerCase();
+      const watch = cmd.match(/^time watch(?: (\d+))?$/);
+      if (watch) {
+        startTimeWatch(Number(watch[1] ?? 8));
+        return;
+      }
+      if (cmd === "time") {
+        pendingTimeStats = true;
+      }
+      net.sendDev(line);
+    },
     onOpenChange: () => syncBlock(),
   });
   consoleUi.append("Dev console ready. Press ` to toggle.", "info");
@@ -524,6 +535,38 @@ function startGame(
   let inputAcc = 0;
   const inputIdleInterval = 1 / TICK_HZ;
   let alive = true;
+
+  let lastSnapTick = 0;
+  let lastSnapAt = 0;
+  let snapGapMs: number[] = [];
+  let pendingTimeStats = false;
+  let timeWatchTimer: ReturnType<typeof setInterval> | null = null;
+
+  function snapshotRateLine(): string {
+    if (snapGapMs.length < 2) return "client snapshots: collecting…";
+    const avg = snapGapMs.reduce((a, b) => a + b, 0) / snapGapMs.length;
+    const hz = 1000 / avg;
+    const min = Math.min(...snapGapMs);
+    const max = Math.max(...snapGapMs);
+    return `client snapshots ~${hz.toFixed(1)} Hz (${min.toFixed(0)}–${max.toFixed(0)} ms, tick=${lastSnapTick})`;
+  }
+
+  function startTimeWatch(sec: number): void {
+    if (timeWatchTimer !== null) clearInterval(timeWatchTimer);
+    const duration = Math.max(3, Math.min(60, sec));
+    consoleUi.append(`time watch ${duration}s — logging snapshot rate…`, "info");
+    const endAt = performance.now() + duration * 1000;
+    timeWatchTimer = setInterval(() => {
+      if (!alive || performance.now() >= endAt) {
+        if (timeWatchTimer !== null) clearInterval(timeWatchTimer);
+        timeWatchTimer = null;
+        consoleUi.append("time watch done", "info");
+        return;
+      }
+      consoleUi.append(snapshotRateLine(), "info");
+      net.sendDev("time");
+    }, 1000);
+  }
 
   function updateInvasionHud(inv: InvasionSnapshot, self?: PlayerSnapshot): void {
     invasionPhaseEl.textContent = phaseLabel(inv.phase);
@@ -890,6 +933,14 @@ function startGame(
   updateBaseHud(initialBase);
 
   function onSnapshot(msg: Extract<ServerMessage, { type: "snapshot" }>): void {
+    const snapNow = performance.now();
+    if (lastSnapAt > 0) {
+      snapGapMs.push(snapNow - lastSnapAt);
+      if (snapGapMs.length > 40) snapGapMs.shift();
+    }
+    lastSnapAt = snapNow;
+    lastSnapTick = msg.tick;
+
     if (msg.you !== active.playerId) return;
     latestPlayers = msg.players;
     latestLoot = msg.lootNodes;
@@ -997,8 +1048,13 @@ function startGame(
     onSnapshot,
     onDevResult(ok: boolean, message: string) {
       consoleUi.append(message, ok ? "ok" : "err");
+      if (pendingTimeStats && ok && message.startsWith("epoch=")) {
+        pendingTimeStats = false;
+        consoleUi.append(snapshotRateLine(), "info");
+      }
     },
     dispose() {
+      if (timeWatchTimer !== null) clearInterval(timeWatchTimer);
       alive = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onGameKeyDown);
