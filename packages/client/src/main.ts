@@ -1,18 +1,18 @@
 import {
   COMBAT,
-  LOOT,
+  INV,
+  ITEMS,
   MILESTONE,
   PLAYER,
   STORAGE_POS,
-  bagTotal,
   distXZ,
-  formatBag,
   getSolidAabbs,
   type GameEvent,
   type LootNodeSnapshot,
   type PlayerSnapshot,
-  type ResourceBag,
   type ServerMessage,
+  type Slot,
+  type SlotRef,
   type ZombieSnapshot,
 } from "@coop/shared";
 import * as THREE from "three";
@@ -23,6 +23,7 @@ import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
 import { ZombieRenderer } from "./render/zombies";
 import { DevConsole } from "./ui/DevConsole";
+import { InventoryUi } from "./ui/InventoryUi";
 import { getPreviousNames, getRememberedName, rememberName } from "./ui/nameMemory";
 
 const lobbyEl = document.getElementById("lobby")!;
@@ -34,6 +35,7 @@ const btnCreate = document.getElementById("btn-create") as HTMLButtonElement;
 const btnJoin = document.getElementById("btn-join") as HTMLButtonElement;
 
 const hudEl = document.getElementById("hud")!;
+const hotbarEl = document.getElementById("hotbar")!;
 const crosshairEl = document.getElementById("crosshair")!;
 const hurtFlashEl = document.getElementById("hurt-flash")!;
 const hitMarkerEl = document.getElementById("hit-marker")!;
@@ -53,8 +55,6 @@ const zombieCountEl = document.getElementById("zombie-count")!;
 const hpFillEl = document.getElementById("hp-fill")!;
 const hpTextEl = document.getElementById("hp-text")!;
 const ammoEl = document.getElementById("ammo")!;
-const carryEl = document.getElementById("carry")!;
-const storageEl = document.getElementById("storage")!;
 const hintEl = document.getElementById("hint")!;
 
 milestoneEl.textContent = MILESTONE;
@@ -129,25 +129,14 @@ function flashLootToast(text: string): void {
   window.setTimeout(() => lootToastEl.classList.remove("on"), 2200);
 }
 
-function formatBagHud(bag: ResourceBag, weightLabel?: string): string {
-  const body = formatBag(bag);
-  return weightLabel ? `${body}\n${weightLabel}` : body;
-}
-
 function handleEvents(events: GameEvent[] | undefined, you: string): void {
   if (!events) return;
   for (const ev of events) {
     if ((ev.kind === "shot" || ev.kind === "melee") && ev.playerId === you && ev.hit) {
       flashHitMarker();
     }
-    if (ev.kind === "loot" && ev.playerId === you) {
-      flashLootToast(`Looted: ${formatBag(ev.got)}`);
-    }
-    if (ev.kind === "deposit" && ev.playerId === you) {
-      flashLootToast(`Deposited: ${formatBag(ev.moved)}`);
-    }
-    if (ev.kind === "withdraw" && ev.playerId === you) {
-      flashLootToast(`Withdrew: ${formatBag(ev.moved)}`);
+    if (ev.kind === "lootOpen" && ev.playerId === you) {
+      flashLootToast("Loot container opened");
     }
   }
 }
@@ -215,11 +204,12 @@ function enterWorld(
   players: PlayerSnapshot[],
   zombies: ZombieSnapshot[],
   lootNodes: LootNodeSnapshot[],
-  storage: ResourceBag,
+  storage: Slot[],
 ): void {
   if (!session) return;
   lobbyEl.classList.add("hidden");
   hudEl.classList.add("visible");
+  hotbarEl.classList.add("visible");
   crosshairEl.classList.add("visible");
   roomCodeEl.textContent = session.code;
   youNameEl.textContent = session.name;
@@ -230,16 +220,13 @@ function enterWorld(
   lastKnownHp = me?.hp ?? PLAYER.maxHp;
   updateHpHud(me?.hp ?? PLAYER.maxHp, me?.maxHp ?? PLAYER.maxHp);
   ammoEl.textContent = String(me?.ammo ?? 0);
-  carryEl.textContent = formatBagHud(
-    me?.inventory ?? { food: 0, scrap: 0, wood: 0, ammo: 0, medkit: 0 },
-    `${(me?.carryWeight ?? 0).toFixed(0)} / ${LOOT.carryMaxWeight}`,
-  );
-  storageEl.textContent = formatBagHud(storage);
 
   if (game) game.dispose();
   game = startGame(session, players, zombies, lootNodes, storage, {
     sendInput: (packet) => socket.send({ type: "input", ...packet }),
     sendDev: (line) => socket.send({ type: "devCommand", line }),
+    sendInvMove: (from, to) => socket.send({ type: "invMove", from, to }),
+    sendOpenLoot: (lootId) => socket.send({ type: "openLoot", lootId }),
   });
 }
 
@@ -248,7 +235,7 @@ function startGame(
   initialPlayers: PlayerSnapshot[],
   initialZombies: ZombieSnapshot[],
   initialLoot: LootNodeSnapshot[],
-  initialStorage: ResourceBag,
+  initialStorage: Slot[],
   net: {
     sendInput: (packet: {
       seq: number;
@@ -260,9 +247,11 @@ function startGame(
       melee: boolean;
       interact: boolean;
       jump: boolean;
-      withdraw: boolean;
+      selectedSlot: number;
     }) => void;
     sendDev: (line: string) => void;
+    sendInvMove: (from: SlotRef, to: SlotRef) => void;
+    sendOpenLoot: (lootId: string) => void;
   },
 ) {
   const solids = getSolidAabbs();
@@ -297,18 +286,44 @@ function startGame(
     yaw: me?.yaw ?? 0,
     pitch: me?.pitch ?? 0,
   });
+  fp.setSelectedSlot(me?.selectedSlot ?? 0);
+
+  let menuBlocks = false;
+  const syncBlock = () => {
+    fp.setBlocked(menuBlocks || consoleUi.isOpen());
+    crosshairEl.classList.toggle("visible", !menuBlocks && !consoleUi.isOpen());
+  };
+
+  const invUi = new InventoryUi({
+    onMove: (from, to) => net.sendInvMove(from, to),
+    onClose: () => {
+      if (document.pointerLockElement !== renderer.domElement) {
+        void renderer.domElement.requestPointerLock();
+      }
+    },
+    onOpenChange: (open) => {
+      menuBlocks = open;
+      syncBlock();
+      if (open && document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+    },
+  });
 
   const consoleUi = new DevConsole({
     onSubmit: (line) => net.sendDev(line),
-    onOpenChange: (open) => {
-      fp.setBlocked(open);
-      crosshairEl.classList.toggle("visible", !open);
-    },
+    onOpenChange: () => syncBlock(),
   });
   consoleUi.append("Dev console ready. Press ` to toggle.", "info");
 
   remotes.sync(initialPlayers, active.playerId);
   zombies.sync(initialZombies);
+  invUi.sync({
+    hotbar: me?.hotbar ?? [],
+    inventory: me?.inventory ?? [],
+    storage: initialStorage,
+    selectedSlot: me?.selectedSlot ?? 0,
+  });
 
   const onResize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -322,15 +337,7 @@ function startGame(
   let alive = true;
   let latestPlayers: PlayerSnapshot[] = initialPlayers;
   let latestLoot: LootNodeSnapshot[] = initialLoot;
-  let latestStorage: ResourceBag = initialStorage;
-
-  function updateBagHud(self: PlayerSnapshot): void {
-    carryEl.textContent = formatBagHud(
-      self.inventory,
-      `${self.carryWeight.toFixed(0)} / ${LOOT.carryMaxWeight}`,
-    );
-    storageEl.textContent = formatBagHud(latestStorage);
-  }
+  let latestStorage: Slot[] = initialStorage;
 
   function updateReviveHud(self: PlayerSnapshot): void {
     const progress = self.reviveProgress;
@@ -346,15 +353,7 @@ function startGame(
       label = target ? `Reviving ${target.name}` : "Reviving";
     }
 
-    if (self.lootProgress > 0 && progress <= 0) {
-      reviveHudEl.classList.add("visible");
-      reviveHudEl.querySelector(".label")!.textContent = "Working";
-      reviveFillEl.style.width = `${Math.round(self.lootProgress * 100)}%`;
-      reviveTimeEl.textContent = `${Math.round(self.lootProgress * 100)}%`;
-      return;
-    }
-
-    if (shown > 0 || (being && shown >= 0 && latestPlayers.some((p) => p.reviveProgress > 0))) {
+    if (shown > 0 || (being && latestPlayers.some((p) => p.reviveProgress > 0))) {
       const p = Math.max(
         shown,
         being ? (latestPlayers.find((x) => x.reviveProgress > 0)?.reviveProgress ?? 0) : 0,
@@ -371,10 +370,68 @@ function startGame(
     reviveHudEl.classList.remove("visible");
   }
 
+  function nearestDowned(selfId: string): PlayerSnapshot | null {
+    let nearestDown: PlayerSnapshot | null = null;
+    let best: number = COMBAT.reviveRange;
+    for (const p of latestPlayers) {
+      if (p.id === selfId || !p.downed) continue;
+      const d = distXZ(fp.state.x, fp.state.z, p.x, p.z);
+      if (d < best) {
+        best = d;
+        nearestDown = p;
+      }
+    }
+    return nearestDown;
+  }
+
+  function nearestLoot(): LootNodeSnapshot | null {
+    let best: LootNodeSnapshot | null = null;
+    let dist: number = INV.interactRange;
+    for (const node of latestLoot) {
+      const d = distXZ(fp.state.x, fp.state.z, node.x, node.z);
+      if (d < dist) {
+        dist = d;
+        best = node;
+      }
+    }
+    return best;
+  }
+
+  function nearStorage(): boolean {
+    return distXZ(fp.state.x, fp.state.z, STORAGE_POS.x, STORAGE_POS.z) <= INV.storageRange;
+  }
+
+  function handleInteractEdge(self: PlayerSnapshot): void {
+    if (!fp.consumeInteractEdge() || self.downed) return;
+
+    if (invUi.isOpen) {
+      invUi.close();
+      return;
+    }
+
+    // Revive takes priority — don't open menus when a downed ally is in range.
+    if (nearestDowned(active.playerId)) return;
+
+    if (nearStorage()) {
+      invUi.openStorage();
+      return;
+    }
+
+    const loot = nearestLoot();
+    if (loot) {
+      net.sendOpenLoot(loot.id);
+      // Open with current snapshot; next snapshot will fill rolled slots.
+      const node = latestLoot.find((n) => n.id === loot.id) ?? loot;
+      invUi.openLoot(node.id, node.label, node.slots);
+      return;
+    }
+
+    invUi.openPlayer();
+  }
+
   function updatePrompts(self: PlayerSnapshot): void {
     fp.setDowned(self.downed);
     updateReviveHud(self);
-    updateBagHud(self);
 
     if (self.downed) {
       downedBannerEl.classList.add("visible");
@@ -386,57 +443,32 @@ function startGame(
     }
     downedBannerEl.classList.remove("visible");
 
-    let nearestDown: PlayerSnapshot | null = null;
-    let best: number = COMBAT.reviveRange;
-    for (const p of latestPlayers) {
-      if (p.id === active.playerId || !p.downed) continue;
-      const d = distXZ(fp.state.x, fp.state.z, p.x, p.z);
-      if (d < best) {
-        best = d;
-        nearestDown = p;
-      }
+    if (invUi.isOpen) {
+      promptEl.classList.remove("visible");
+      return;
     }
 
-    if (nearestDown) {
+    const down = nearestDowned(active.playerId);
+    if (down) {
       promptEl.classList.add("visible");
       promptEl.textContent =
         self.reviveProgress > 0
-          ? `Reviving ${nearestDown.name}…`
-          : `Hold E to revive ${nearestDown.name} (${COMBAT.reviveDuration}s)`;
+          ? `Reviving ${down.name}…`
+          : `Hold E to revive ${down.name} (${COMBAT.reviveDuration}s)`;
       return;
     }
 
-    let nearestLoot: LootNodeSnapshot | null = null;
-    let lootDist: number = LOOT.interactRange;
-    for (const node of latestLoot) {
-      if (node.searched) continue;
-      const d = distXZ(fp.state.x, fp.state.z, node.x, node.z);
-      if (d < lootDist) {
-        lootDist = d;
-        nearestLoot = node;
-      }
-    }
-
-    const nearStorage =
-      distXZ(fp.state.x, fp.state.z, STORAGE_POS.x, STORAGE_POS.z) <= LOOT.storageRange;
-
-    if (nearestLoot) {
+    if (nearStorage()) {
       promptEl.classList.add("visible");
-      promptEl.textContent = `Hold E to search ${nearestLoot.label}`;
+      promptEl.textContent = "E — open storage";
       return;
     }
 
-    if (nearStorage) {
-      const canDeposit = bagTotal(self.inventory) > 0;
-      const canWithdraw = bagTotal(latestStorage) > 0;
-      if (canDeposit || canWithdraw) {
-        promptEl.classList.add("visible");
-        const parts: string[] = [];
-        if (canDeposit) parts.push("Hold E deposit");
-        if (canWithdraw) parts.push("Hold R withdraw");
-        promptEl.textContent = parts.join(" · ");
-        return;
-      }
+    const loot = nearestLoot();
+    if (loot) {
+      promptEl.classList.add("visible");
+      promptEl.textContent = loot.opened ? `E — open ${loot.label}` : `E — search ${loot.label}`;
+      return;
     }
 
     promptEl.classList.remove("visible");
@@ -452,8 +484,26 @@ function startGame(
     const self = msg.players.find((p) => p.id === active.playerId);
     if (self) {
       fp.reconcile(self);
+      fp.setSelectedSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
       ammoEl.textContent = String(self.ammo);
+      const activeGun = self.hotbar[self.selectedSlot];
+      const gunHint =
+        activeGun && ITEMS[activeGun.id].kind === "gun" ? ITEMS[activeGun.id].label : "no gun";
+      ammoEl.textContent = `${self.ammo} · ${gunHint}`;
+
+      const lootSlots =
+        invUi.getMode() === "loot" && invUi.getLootId()
+          ? (latestLoot.find((n) => n.id === invUi.getLootId())?.slots ?? [])
+          : undefined;
+      invUi.sync({
+        hotbar: self.hotbar,
+        inventory: self.inventory,
+        storage: latestStorage,
+        lootSlots,
+        selectedSlot: self.selectedSlot,
+      });
+      handleInteractEdge(self);
       updatePrompts(self);
     }
     remotes.sync(msg.players, active.playerId);
@@ -475,11 +525,25 @@ function startGame(
     if (inputAcc >= 1 / 30) {
       inputAcc = 0;
       if (!consoleUi.isOpen()) {
-        net.sendInput(fp.nextInputPacket());
+        const packet = fp.nextInputPacket();
+        // While inventory is open, don't hold E for revive, and don't shoot.
+        if (invUi.isOpen) {
+          packet.interact = false;
+          packet.shoot = false;
+          packet.melee = false;
+          packet.jump = false;
+          packet.forward = 0;
+          packet.strafe = 0;
+        }
+        invUi.setSelectedSlot(packet.selectedSlot);
+        net.sendInput(packet);
       }
     }
 
+    // Poll E edge between snapshots so UI feels snappy.
     const self = latestPlayers.find((p) => p.id === active.playerId);
+    if (self) handleInteractEdge(self);
+
     camera.position.set(
       fp.state.x,
       fp.state.y + (self?.downed ? 0.55 : PLAYER.eyeHeight),
@@ -491,9 +555,11 @@ function startGame(
 
     hintEl.textContent = consoleUi.isOpen()
       ? "Dev console open — ` to close"
-      : fp.isLocked
-        ? "LMB shoot · F melee · Space jump · E search/deposit/revive · R withdraw · ` console"
-        : "Click the game to capture mouse";
+      : invUi.isOpen
+        ? "Inventory open — E to close · drag to move items"
+        : fp.isLocked
+          ? "1–6 hotbar · E inventory/loot/storage · LMB shoot (gun) · F melee · Space jump · ` console"
+          : "Click the game to capture mouse";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
@@ -510,6 +576,7 @@ function startGame(
       alive = false;
       window.removeEventListener("resize", onResize);
       fp.dispose();
+      invUi.dispose();
       consoleUi.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -517,6 +584,7 @@ function startGame(
       reviveHudEl.classList.remove("visible");
       downedBannerEl.classList.remove("visible");
       lootToastEl.classList.remove("on");
+      hotbarEl.classList.remove("visible");
     },
   };
 }

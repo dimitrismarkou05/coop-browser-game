@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   COMBAT,
-  LOOT,
+  INV,
+  ITEMS,
   LOOT_SPOTS,
   M4_AMBIENT,
   MAX_PLAYERS_PER_ROOM,
@@ -16,28 +17,32 @@ import {
   ZOMBIE_DEFS,
   applyPlayerMovement,
   applyVerticalMovement,
-  bagWeight,
   clampPitch,
   clampToZombiePen,
+  cloneSlots,
+  consumeItem,
+  countItem,
   distXZ,
-  emptyBag,
+  emptySlots,
   eyePosition,
   firstWallHit,
   getSolidAabbs,
   inMeleeCone,
   lookDirection,
+  moveSlots,
   moveToward,
   randomPointInZombiePen,
   raycastCapsuleXZ,
-  rollLootTable,
-  transferAll,
-  transferFill,
-  RESOURCE_IDS,
+  rollLootStacks,
+  startingHotbar,
+  startingInventory,
   type GameEvent,
   type LootNodeSnapshot,
   type PlayerSnapshot,
-  type ResourceBag,
   type ServerMessage,
+  type Slot,
+  type SlotRef,
+  type WeaponId,
   type ZombieSnapshot,
   type ZombieTypeId,
 } from "@coop/shared";
@@ -57,8 +62,9 @@ export type RoomPlayer = {
   strafe: number;
   hp: number;
   maxHp: number;
-  ammo: number;
-  inventory: ResourceBag;
+  hotbar: Slot[];
+  inventory: Slot[];
+  selectedSlot: number;
   downed: boolean;
   bleedout: number;
   iFrames: number;
@@ -67,12 +73,8 @@ export type RoomPlayer = {
   meleeQueued: boolean;
   jumpQueued: boolean;
   interactHeld: boolean;
-  withdrawHeld: boolean;
   reviveTargetId: string | null;
   reviveProgress: number;
-  lootTargetId: string | null;
-  lootProgress: number;
-  lootAction: "search" | "deposit" | "withdraw" | null;
   ws: WebSocket;
 };
 
@@ -85,7 +87,6 @@ export type RoomZombie = {
   yaw: number;
   hp: number;
   attackCd: number;
-  /** If false, free-roam (dev spawns). Ambient pen zombies stay clamped. */
   penned: boolean;
 };
 
@@ -94,7 +95,8 @@ type RoomLootNode = {
   label: string;
   x: number;
   z: number;
-  searched: boolean;
+  opened: boolean;
+  slots: Slot[];
   table: (typeof LOOT_SPOTS)[number]["table"];
 };
 
@@ -114,6 +116,10 @@ function makeCode(): string {
   return code;
 }
 
+function isWeaponId(id: string): id is WeaponId {
+  return id in WEAPONS;
+}
+
 let nextPlayerSeq = 1;
 let nextZombieSeq = 1;
 
@@ -122,7 +128,7 @@ export class Room {
   readonly players = new Map<string, RoomPlayer>();
   readonly zombies = new Map<string, RoomZombie>();
   readonly lootNodes = new Map<string, RoomLootNode>();
-  storage: ResourceBag = emptyBag();
+  storage: Slot[] = emptySlots(INV.storageSize);
   private tick = 0;
   private respawnAcc = 0;
   private readonly solids = getSolidAabbs();
@@ -166,8 +172,9 @@ export class Room {
       strafe: 0,
       hp: PLAYER.maxHp,
       maxHp: PLAYER.maxHp,
-      ammo: COMBAT.startingAmmo,
-      inventory: emptyBag(),
+      hotbar: startingHotbar(),
+      inventory: startingInventory(),
+      selectedSlot: 0,
       downed: false,
       bleedout: 0,
       iFrames: PLAYER.respawnIFrames,
@@ -176,12 +183,8 @@ export class Room {
       meleeQueued: false,
       jumpQueued: false,
       interactHeld: false,
-      withdrawHeld: false,
       reviveTargetId: null,
       reviveProgress: 0,
-      lootTargetId: null,
-      lootProgress: 0,
-      lootAction: null,
       ws,
     };
     this.players.set(id, player);
@@ -208,7 +211,7 @@ export class Room {
       melee?: boolean;
       interact?: boolean;
       jump?: boolean;
-      withdraw?: boolean;
+      selectedSlot?: number;
     },
   ): void {
     const player = this.players.get(playerId);
@@ -221,7 +224,43 @@ export class Room {
     if (input.melee) player.meleeQueued = true;
     if (input.jump) player.jumpQueued = true;
     player.interactHeld = Boolean(input.interact);
-    player.withdrawHeld = Boolean(input.withdraw);
+    if (typeof input.selectedSlot === "number") {
+      player.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, input.selectedSlot));
+    }
+  }
+
+  openLoot(playerId: string, lootId: string): void {
+    const player = this.players.get(playerId);
+    const node = this.lootNodes.get(lootId);
+    if (!player || !node || player.downed) return;
+    if (distXZ(player.x, player.z, node.x, node.z) > INV.interactRange) return;
+    if (!node.opened) {
+      const stacks = rollLootStacks(node.table);
+      node.slots = stacks.map((s) => ({ id: s.id, count: s.count }));
+      node.opened = true;
+      this.tickEvents.push({ kind: "lootOpen", playerId, spotId: lootId });
+    }
+  }
+
+  invMove(playerId: string, from: SlotRef, to: SlotRef): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+
+    const fromBag = this.resolveBag(player, from);
+    const toBag = this.resolveBag(player, to);
+    if (!fromBag || !toBag) return;
+
+    // Near-check when touching storage / loot
+    if (from.bag === "storage" || to.bag === "storage") {
+      if (distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) > INV.storageRange) return;
+    }
+    if (from.bag === "loot" || to.bag === "loot") {
+      const lootId = from.lootId ?? to.lootId;
+      const node = lootId ? this.lootNodes.get(lootId) : null;
+      if (!node || distXZ(player.x, player.z, node.x, node.z) > INV.interactRange) return;
+    }
+
+    moveSlots(fromBag, from.index, toBag, to.index);
   }
 
   handleDevCommand(playerId: string, line: string): { ok: boolean; message: string } {
@@ -329,14 +368,14 @@ export class Room {
       color: p.color,
       hp: p.hp,
       maxHp: p.maxHp,
-      ammo: p.ammo,
-      inventory: { ...p.inventory },
-      carryWeight: bagWeight(p.inventory),
+      ammo: countItem(p.hotbar, "ammo") + countItem(p.inventory, "ammo"),
+      hotbar: cloneSlots(p.hotbar),
+      inventory: cloneSlots(p.inventory),
+      selectedSlot: p.selectedSlot,
       downed: p.downed,
       bleedout: p.bleedout,
       reviveProgress: Math.min(1, p.reviveProgress / COMBAT.reviveDuration),
       beingRevived: beingRevived.has(p.id),
-      lootProgress: p.lootProgress,
     }));
   }
 
@@ -358,12 +397,13 @@ export class Room {
       label: n.label,
       x: n.x,
       z: n.z,
-      searched: n.searched,
+      opened: n.opened,
+      slots: cloneSlots(n.slots),
     }));
   }
 
-  snapshotStorage(): ResourceBag {
-    return { ...this.storage };
+  snapshotStorage(): Slot[] {
+    return cloneSlots(this.storage);
   }
 
   broadcast(message: ServerMessage, exceptId?: string): void {
@@ -377,6 +417,24 @@ export class Room {
     clearInterval(this.timer);
   }
 
+  private resolveBag(player: RoomPlayer, ref: SlotRef): Slot[] | null {
+    switch (ref.bag) {
+      case "hotbar":
+        return player.hotbar;
+      case "inv":
+        return player.inventory;
+      case "storage":
+        return this.storage;
+      case "loot": {
+        if (!ref.lootId) return null;
+        const node = this.lootNodes.get(ref.lootId);
+        return node?.opened ? node.slots : null;
+      }
+      default:
+        return null;
+    }
+  }
+
   private seedLootNodes(): void {
     for (const spot of LOOT_SPOTS) {
       this.lootNodes.set(spot.id, {
@@ -384,7 +442,8 @@ export class Room {
         label: spot.label,
         x: spot.x,
         z: spot.z,
-        searched: false,
+        opened: false,
+        slots: [],
         table: spot.table,
       });
     }
@@ -464,9 +523,6 @@ export class Room {
     player.jumpQueued = false;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
-    player.lootProgress = 0;
-    player.lootTargetId = null;
-    player.lootAction = null;
     this.tickEvents.push({ kind: "down", playerId: player.id });
   }
 
@@ -486,87 +542,10 @@ export class Room {
     player.strafe = 0;
     player.reviveProgress = 0;
     player.reviveTargetId = null;
-    this.clearLootInteract(player);
   }
 
-  private clearLootInteract(player: RoomPlayer): void {
-    player.lootProgress = 0;
-    player.lootTargetId = null;
-    player.lootAction = null;
-  }
-
-  private nearStorage(player: RoomPlayer): boolean {
-    return distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) <= LOOT.storageRange;
-  }
-
-  private nearestLootNode(player: RoomPlayer): RoomLootNode | null {
-    let best: RoomLootNode | null = null;
-    let bestDist: number = LOOT.interactRange;
-    for (const node of this.lootNodes.values()) {
-      if (node.searched) continue;
-      const d = distXZ(player.x, player.z, node.x, node.z);
-      if (d < bestDist) {
-        bestDist = d;
-        best = node;
-      }
-    }
-    return best;
-  }
-
-  private applyAmmoDelta(player: RoomPlayer, delta: number): void {
-    if (!delta) return;
-    player.ammo = Math.max(0, player.ammo + delta);
-  }
-
-  private finishSearch(player: RoomPlayer, node: RoomLootNode): void {
-    node.searched = true;
-    const rolled = rollLootTable(node.table);
-    const result = transferFill(rolled, player.inventory);
-    player.inventory = result.to;
-    this.applyAmmoDelta(player, result.moved.ammo);
-    this.tickEvents.push({
-      kind: "loot",
-      playerId: player.id,
-      spotId: node.id,
-      got: result.moved,
-    });
-    this.clearLootInteract(player);
-  }
-
-  private finishDeposit(player: RoomPlayer): void {
-    const before = { ...player.inventory };
-    const result = transferAll(player.inventory, this.storage);
-    player.inventory = result.from;
-    this.storage = result.to;
-    this.applyAmmoDelta(player, -before.ammo);
-    this.tickEvents.push({
-      kind: "deposit",
-      playerId: player.id,
-      moved: before,
-    });
-    this.clearLootInteract(player);
-  }
-
-  private finishWithdraw(player: RoomPlayer): void {
-    // Pull up to withdrawChunk of each stocked resource into carry.
-    const staged = emptyBag();
-    for (const id of RESOURCE_IDS) {
-      const take = Math.min(LOOT.withdrawChunk, this.storage[id]);
-      staged[id] = take;
-      this.storage[id] -= take;
-    }
-    const result = transferFill(staged, player.inventory);
-    for (const id of RESOURCE_IDS) {
-      this.storage[id] += result.from[id];
-    }
-    player.inventory = result.to;
-    this.applyAmmoDelta(player, result.moved.ammo);
-    this.tickEvents.push({
-      kind: "withdraw",
-      playerId: player.id,
-      moved: result.moved,
-    });
-    this.clearLootInteract(player);
+  private selectedItem(player: RoomPlayer): Slot {
+    return player.hotbar[player.selectedSlot] ?? null;
   }
 
   private damageZombie(zombie: RoomZombie, amount: number, by: string): boolean {
@@ -580,13 +559,32 @@ export class Room {
   }
 
   private tryShoot(player: RoomPlayer): void {
-    const gun = WEAPONS.pistol;
-    if (player.weaponCd > 0 || player.ammo < gun.ammoCost) {
+    const stack = this.selectedItem(player);
+    if (!stack || ITEMS[stack.id].kind !== "gun" || !isWeaponId(stack.id)) {
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
+      return;
+    }
+    const gun = WEAPONS[stack.id];
+    if (gun.kind !== "gun") {
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
+      return;
+    }
+    if (player.weaponCd > 0) {
       this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
       return;
     }
 
-    player.ammo -= gun.ammoCost;
+    const ammoLeft =
+      countItem(player.hotbar, "ammo") + countItem(player.inventory, "ammo");
+    if (ammoLeft < gun.ammoCost) {
+      this.tickEvents.push({ kind: "shot", playerId: player.id, hit: false });
+      return;
+    }
+
+    let need = gun.ammoCost;
+    need = consumeItem(player.hotbar, "ammo", need);
+    if (need > 0) consumeItem(player.inventory, "ammo", need);
+
     player.weaponCd = gun.cooldown;
 
     const origin = eyePosition(player.x, player.y, player.z);
@@ -624,15 +622,20 @@ export class Room {
   }
 
   private tryMelee(player: RoomPlayer): void {
-    const melee = WEAPONS.melee;
+    const stack = this.selectedItem(player);
+    let weapon = WEAPONS.fists;
+    if (stack && ITEMS[stack.id].kind === "melee" && isWeaponId(stack.id)) {
+      weapon = WEAPONS[stack.id];
+    }
+
     if (player.weaponCd > 0) {
       this.tickEvents.push({ kind: "melee", playerId: player.id, hit: false });
       return;
     }
-    player.weaponCd = melee.cooldown;
+    player.weaponCd = weapon.cooldown;
 
     let best: RoomZombie | null = null;
-    let bestDist = melee.range;
+    let bestDist = weapon.range;
     for (const zombie of this.zombies.values()) {
       if (
         !inMeleeCone(
@@ -641,8 +644,8 @@ export class Room {
           player.yaw,
           zombie.x,
           zombie.z,
-          melee.range,
-          melee.coneDeg ?? 45,
+          weapon.range,
+          weapon.coneDeg ?? 45,
         )
       ) {
         continue;
@@ -655,92 +658,52 @@ export class Room {
     }
 
     if (best) {
-      this.damageZombie(best, melee.damage, player.id);
+      this.damageZombie(best, weapon.damage, player.id);
       this.tickEvents.push({ kind: "melee", playerId: player.id, hit: true });
     } else {
       this.tickEvents.push({ kind: "melee", playerId: player.id, hit: false });
     }
   }
 
-  private updateInteract(player: RoomPlayer, dt: number): void {
-    if (player.downed) {
+  private updateRevive(player: RoomPlayer, dt: number): void {
+    if (player.downed || !player.interactHeld) {
       player.reviveProgress = 0;
       player.reviveTargetId = null;
-      this.clearLootInteract(player);
       return;
     }
 
-    // Priority: revive > loot search > deposit. Withdraw is KeyR (separate hold).
-    let reviveTarget: RoomPlayer | null = null;
-    let bestRevive: number = COMBAT.reviveRange;
+    let target: RoomPlayer | null = null;
+    let best: number = COMBAT.reviveRange;
     for (const other of this.players.values()) {
       if (other.id === player.id || !other.downed) continue;
       const d = distXZ(player.x, player.z, other.x, other.z);
-      if (d < bestRevive) {
-        bestRevive = d;
-        reviveTarget = other;
+      if (d < best) {
+        best = d;
+        target = other;
       }
     }
 
-    if (player.interactHeld && reviveTarget) {
-      this.clearLootInteract(player);
-      if (player.reviveTargetId !== reviveTarget.id) {
-        player.reviveTargetId = reviveTarget.id;
-        player.reviveProgress = 0;
-      }
-      player.reviveProgress += dt;
-      if (player.reviveProgress >= COMBAT.reviveDuration) {
-        reviveTarget.downed = false;
-        reviveTarget.bleedout = 0;
-        reviveTarget.hp = Math.round(reviveTarget.maxHp * COMBAT.reviveHpFraction);
-        reviveTarget.iFrames = PLAYER.hurtIFrames;
-        this.tickEvents.push({ kind: "revive", playerId: reviveTarget.id, by: player.id });
-        player.reviveProgress = 0;
-        player.reviveTargetId = null;
-      }
+    if (!target) {
+      player.reviveProgress = 0;
+      player.reviveTargetId = null;
       return;
     }
 
-    player.reviveProgress = 0;
-    player.reviveTargetId = null;
-
-    if (player.withdrawHeld && this.nearStorage(player) && bagWeight(this.storage) > 0) {
-      if (player.lootAction !== "withdraw") {
-        player.lootAction = "withdraw";
-        player.lootTargetId = "storage";
-        player.lootProgress = 0;
-      }
-      player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.withdrawDuration);
-      if (player.lootProgress >= 1) this.finishWithdraw(player);
-      return;
+    if (player.reviveTargetId !== target.id) {
+      player.reviveTargetId = target.id;
+      player.reviveProgress = 0;
     }
 
-    if (player.interactHeld) {
-      const lootNode = this.nearestLootNode(player);
-      if (lootNode) {
-        if (player.lootAction !== "search" || player.lootTargetId !== lootNode.id) {
-          player.lootAction = "search";
-          player.lootTargetId = lootNode.id;
-          player.lootProgress = 0;
-        }
-        player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.searchDuration);
-        if (player.lootProgress >= 1) this.finishSearch(player, lootNode);
-        return;
-      }
-
-      if (this.nearStorage(player) && bagWeight(player.inventory) > 0) {
-        if (player.lootAction !== "deposit") {
-          player.lootAction = "deposit";
-          player.lootTargetId = "storage";
-          player.lootProgress = 0;
-        }
-        player.lootProgress = Math.min(1, player.lootProgress + dt / LOOT.depositDuration);
-        if (player.lootProgress >= 1) this.finishDeposit(player);
-        return;
-      }
+    player.reviveProgress += dt;
+    if (player.reviveProgress >= COMBAT.reviveDuration) {
+      target.downed = false;
+      target.bleedout = 0;
+      target.hp = Math.round(target.maxHp * COMBAT.reviveHpFraction);
+      target.iFrames = PLAYER.hurtIFrames;
+      this.tickEvents.push({ kind: "revive", playerId: target.id, by: player.id });
+      player.reviveProgress = 0;
+      player.reviveTargetId = null;
     }
-
-    this.clearLootInteract(player);
   }
 
   private isActivelyBeingRevived(targetId: string): boolean {
@@ -758,7 +721,6 @@ export class Room {
     this.tick += 1;
     this.tickEvents = [];
 
-    // Pass 1: living players move / fight / revive.
     for (const player of this.players.values()) {
       if (player.iFrames > 0) player.iFrames = Math.max(0, player.iFrames - dt);
       if (player.weaponCd > 0) player.weaponCd = Math.max(0, player.weaponCd - dt);
@@ -805,10 +767,9 @@ export class Room {
         this.tryMelee(player);
       }
 
-      this.updateInteract(player, dt);
+      this.updateRevive(player, dt);
     }
 
-    // Pass 2: bleedout (paused while an ally is actively reviving).
     for (const player of this.players.values()) {
       if (!player.downed) continue;
       if (!this.isActivelyBeingRevived(player.id)) {
@@ -937,12 +898,24 @@ export class RoomManager {
       melee?: boolean;
       interact?: boolean;
       jump?: boolean;
-      withdraw?: boolean;
+      selectedSlot?: number;
     },
   ): void {
     const binding = this.bySocket.get(ws);
     if (!binding) return;
     binding.room.setInput(binding.playerId, input);
+  }
+
+  handleOpenLoot(ws: WebSocket, lootId: string): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.openLoot(binding.playerId, lootId);
+  }
+
+  handleInvMove(ws: WebSocket, from: SlotRef, to: SlotRef): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.invMove(binding.playerId, from, to);
   }
 
   handleDevCommand(ws: WebSocket, line: string): void {

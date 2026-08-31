@@ -389,11 +389,129 @@
       #loot-toast.on {
         opacity: 1;
       }
-      #carry,
-      #storage {
+      :root {
+        --slot: 52px;
+      }
+      #hotbar {
+        position: fixed;
+        left: 50%;
+        bottom: 18px;
+        transform: translateX(-50%);
+        z-index: 14;
+        display: none;
+        grid-template-columns: repeat(6, var(--slot));
+        gap: 4px;
+        padding: 6px;
+        background: rgba(13, 17, 23, 0.82);
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        pointer-events: auto;
+      }
+      #hotbar.visible {
+        display: grid;
+      }
+      .inv-slot {
+        width: var(--slot);
+        height: var(--slot);
+        border: 2px solid #30363d;
+        border-radius: 6px;
+        background: #161b22;
+        position: relative;
+        cursor: pointer;
+        user-select: none;
+        box-sizing: border-box;
+      }
+      .inv-slot.filled {
+        background: color-mix(in srgb, var(--item, #3d9a5f) 35%, #161b22);
+        border-color: color-mix(in srgb, var(--item, #3d9a5f) 55%, #30363d);
+      }
+      .inv-slot.selected {
+        border-color: #e6edf3;
+        box-shadow: inset 0 0 0 1px #e6edf3;
+      }
+      .inv-slot .slot-label {
+        display: block;
+        font-size: 10px;
+        line-height: 1.15;
+        padding: 4px;
+        white-space: pre-line;
+        text-align: center;
+        color: #e6edf3;
+        pointer-events: none;
+      }
+      .inv-slot .slot-num {
+        position: absolute;
+        top: 2px;
+        left: 4px;
+        font-size: 9px;
+        color: #8b949e;
+        pointer-events: none;
+      }
+      #inv-ui {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(8, 12, 18, 0.72);
+        pointer-events: auto;
+      }
+      #inv-ui.open {
+        display: flex;
+      }
+      #inv-panel {
+        width: min(560px, calc(100vw - 24px));
+        padding: 18px 16px 16px;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        background: rgba(22, 27, 34, 0.97);
+      }
+      #inv-title {
+        margin: 0 0 12px;
+        font-size: 16px;
+        font-weight: 650;
+      }
+      #inv-container-grid,
+      #inv-player-grid {
+        display: grid;
+        gap: 4px;
+        justify-content: center;
+        margin-bottom: 14px;
+      }
+      #inv-player-label {
+        margin: 0 0 8px;
+        color: #8b949e;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .inv-empty {
+        color: #8b949e;
         font-size: 13px;
-        max-width: 220px;
-        white-space: pre-wrap;
+        padding: 12px;
+        text-align: center;
+      }
+      #inv-ghost {
+        position: fixed;
+        z-index: 30;
+        pointer-events: none;
+        display: none;
+        padding: 6px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        color: #04140a;
+        font-weight: 650;
+        max-width: 120px;
+      }
+      #inv-ghost.on {
+        display: block;
+      }
+      #inv-hint {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #8b949e;
+        text-align: center;
       }
       canvas {
         display: block;
@@ -404,7 +522,7 @@
     <div id="lobby">
       <div class="panel">
         <h1>Co-op Zombie</h1>
-        <p>M6 — loot spots, carry weight, shared base storage (E deposit / R withdraw).</p>
+        <p>M6 — hotbar, inventory (E), loot &amp; storage drag-and-drop.</p>
         <label for="name">Display name</label>
         <input id="name" maxlength="16" placeholder="Survivor" autocomplete="off" list="name-history" />
         <datalist id="name-history"></datalist>
@@ -439,15 +557,22 @@
       </div>
       <div class="label" style="margin-top: 8px">Ammo</div>
       <div id="ammo">—</div>
-      <div class="label" style="margin-top: 8px">Carry</div>
-      <div id="carry">—</div>
-      <div class="label" style="margin-top: 8px">Base storage</div>
-      <div id="storage">—</div>
       <div class="label" style="margin-top: 8px">Zombies</div>
       <div id="zombie-count">—</div>
       <div class="label" style="margin-top: 8px">Controls</div>
       <div id="hint">Click the game to capture mouse</div>
     </div>
+    <div id="hotbar"></div>
+    <div id="inv-ui">
+      <div id="inv-panel">
+        <h2 id="inv-title">Inventory</h2>
+        <div id="inv-container-grid"></div>
+        <div id="inv-player-label">Your inventory</div>
+        <div id="inv-player-grid"></div>
+        <div id="inv-hint">Drag items between slots · E to close · 1–6 select hotbar</div>
+      </div>
+    </div>
+    <div id="inv-ghost"></div>
     <div id="loot-toast"></div>
     <div id="prompt"></div>
     <div id="revive-hud">

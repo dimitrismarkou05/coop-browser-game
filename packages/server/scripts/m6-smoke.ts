@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { LOOT, LOOT_SPOTS, STORAGE_POS, bagTotal } from "@coop/shared";
+import { INV, LOOT_SPOTS, STORAGE_POS } from "@coop/shared";
 
 function connect(): Promise<WebSocket> {
   return new Promise((res, rej) => {
@@ -24,7 +24,6 @@ function wait(ws: WebSocket, type: string): Promise<any> {
   });
 }
 
-/** yaw such that forward faces (dx, dz) in XZ (matches shared movement). */
 function faceYaw(dx: number, dz: number): number {
   return Math.atan2(-dx, -dz);
 }
@@ -34,11 +33,10 @@ function sendInput(
   seq: number,
   extra: Partial<{
     forward: number;
-    strafe: number;
     yaw: number;
-    pitch: number;
-    interact: boolean;
-    withdraw: boolean;
+    selectedSlot: number;
+    shoot: boolean;
+    melee: boolean;
   }> = {},
 ): void {
   ws.send(
@@ -60,40 +58,56 @@ async function walkTo(
   target: { x: number; z: number },
   range: number,
   seqRef: { n: number },
-  maxSteps = 500,
 ): Promise<any> {
   let me: any = null;
-  let snap: any = null;
-  for (let i = 0; i < maxSteps; i++) {
-    snap = await wait(ws, "snapshot");
+  for (let i = 0; i < 500; i++) {
+    const snap = await wait(ws, "snapshot");
     me = snap.players.find((p: { id: string }) => p.id === playerId) ?? snap.players[0];
     const dx = target.x - me.x;
     const dz = target.z - me.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist <= range) return snap;
+    if (Math.hypot(dx, dz) <= range) return snap;
     sendInput(ws, seqRef.n++, { forward: 1, yaw: faceYaw(dx, dz) });
   }
-  throw new Error(`never reached ${target.x},${target.z} (last ${me?.x},${me?.z})`);
+  throw new Error(`never reached ${target.x},${target.z}`);
 }
 
 async function main() {
   const a = await connect();
   const welcome = await wait(a, "welcome");
-  if (welcome.milestone !== "M6") throw new Error("expected M6, got " + welcome.milestone);
+  if (welcome.milestone !== "M6") throw new Error("expected M6");
 
   a.send(JSON.stringify({ type: "createRoom", name: "Looter" }));
   const joined = await wait(a, "roomJoined");
-
-  if (!joined.lootNodes || joined.lootNodes.length !== LOOT_SPOTS.length) {
-    throw new Error("lootNodes missing or wrong count: " + joined.lootNodes?.length);
+  if (joined.lootNodes?.length !== LOOT_SPOTS.length) throw new Error("loot nodes");
+  if (!Array.isArray(joined.storage) || joined.storage.length !== INV.storageSize) {
+    throw new Error("storage size");
   }
-  if (!joined.storage) throw new Error("storage missing on roomJoined");
-  console.log("PASS roomJoined loot/storage", joined.lootNodes.length);
+  const me0 = joined.players[0];
+  if (!me0.hotbar || me0.hotbar.length !== INV.hotbarSize) throw new Error("hotbar");
+  if (me0.hotbar[0]?.id !== "pistol") throw new Error("start without pistol");
+  console.log("PASS roomJoined grids");
 
   const seqRef = { n: 1 };
-  const me0 = joined.players.find((p: { id: string }) => p.id === joined.playerId) ?? joined.players[0];
 
-  // Pick nearest unsearched loot to spawn.
+  // Can't shoot without gun selected — select empty slot 5
+  sendInput(a, seqRef.n++, { selectedSlot: 5, shoot: true });
+  let snap = await wait(a, "snapshot");
+  let me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
+  if (me.selectedSlot !== 5) throw new Error("select slot");
+  // Shoot with empty hand should not consume ammo
+  const ammoBefore = me.ammo;
+  sendInput(a, seqRef.n++, { selectedSlot: 5, shoot: true });
+  snap = await wait(a, "snapshot");
+  me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
+  if (me.ammo !== ammoBefore) throw new Error("shot without gun consumed ammo");
+  console.log("PASS no-gun shoot blocked");
+
+  // Melee still works without gun
+  sendInput(a, seqRef.n++, { selectedSlot: 5, melee: true });
+  snap = await wait(a, "snapshot");
+  console.log("PASS melee without gun");
+
+  // Walk to loot, open, drag to inv
   let spot = joined.lootNodes[0];
   let best = Infinity;
   for (const n of joined.lootNodes) {
@@ -103,60 +117,60 @@ async function main() {
       spot = n;
     }
   }
-  console.log("targeting loot", spot.id, spot.label, "dist", best.toFixed(1));
-
-  let snap = await walkTo(a, joined.playerId, spot, LOOT.interactRange * 0.9, seqRef);
-  let me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
-
-  let looted = false;
-  for (let i = 0; i < 80; i++) {
-    sendInput(a, seqRef.n++, { interact: true, yaw: me.yaw });
+  snap = await walkTo(a, joined.playerId, spot, INV.interactRange * 0.85, seqRef);
+  a.send(JSON.stringify({ type: "openLoot", lootId: spot.id }));
+  for (let i = 0; i < 20; i++) {
     snap = await wait(a, "snapshot");
-    me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
     const node = snap.lootNodes.find((n: { id: string }) => n.id === spot.id);
-    if (node?.searched) {
-      looted = true;
-      console.log("PASS search", spot.id, "carry", me.carryWeight, me.inventory);
+    if (node?.opened) {
+      console.log("PASS open loot slots", node.slots.length);
+      if (node.slots.length > 0 && node.slots[0]) {
+        a.send(
+          JSON.stringify({
+            type: "invMove",
+            from: { bag: "loot", index: 0, lootId: spot.id },
+            to: { bag: "inv", index: 0 },
+          }),
+        );
+        snap = await wait(a, "snapshot");
+        me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
+        if (!me.inventory[0]) throw new Error("loot drag failed");
+        console.log("PASS loot → inv", me.inventory[0]);
+      }
       break;
     }
+    sendInput(a, seqRef.n++, {});
   }
-  if (!looted) throw new Error("failed to search " + spot.id);
 
-  snap = await walkTo(a, joined.playerId, STORAGE_POS, LOOT.storageRange * 0.9, seqRef);
+  // Storage drag
+  snap = await walkTo(a, joined.playerId, STORAGE_POS, INV.storageRange * 0.85, seqRef);
   me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
+  // Move hotbar ammo into storage
+  a.send(
+    JSON.stringify({
+      type: "invMove",
+      from: { bag: "hotbar", index: 1 },
+      to: { bag: "storage", index: 0 },
+    }),
+  );
+  snap = await wait(a, "snapshot");
+  if (!snap.storage[0] || snap.storage[0].id !== "ammo") throw new Error("storage deposit");
+  console.log("PASS hotbar → storage", snap.storage[0]);
 
-  if (bagTotal(me.inventory) > 0) {
-    let deposited = false;
-    for (let i = 0; i < 60; i++) {
-      sendInput(a, seqRef.n++, { interact: true, yaw: me.yaw });
-      snap = await wait(a, "snapshot");
-      me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
-      if (bagTotal(snap.storage) > 0) {
-        deposited = true;
-        console.log("PASS deposit", snap.storage);
-        break;
-      }
-    }
-    if (!deposited) throw new Error("deposit failed");
-
-    let withdrew = false;
-    for (let i = 0; i < 60; i++) {
-      sendInput(a, seqRef.n++, { withdraw: true, yaw: me.yaw });
-      snap = await wait(a, "snapshot");
-      me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
-      if (bagTotal(me.inventory) > 0) {
-        withdrew = true;
-        console.log("PASS withdraw", me.inventory);
-        break;
-      }
-    }
-    if (!withdrew) throw new Error("withdraw failed");
-  } else {
-    console.log("PASS loot rolled empty / nothing fit — skip deposit");
-  }
+  a.send(
+    JSON.stringify({
+      type: "invMove",
+      from: { bag: "storage", index: 0 },
+      to: { bag: "hotbar", index: 1 },
+    }),
+  );
+  snap = await wait(a, "snapshot");
+  me = snap.players.find((p: { id: string }) => p.id === joined.playerId);
+  if (!me.hotbar[1] || me.hotbar[1].id !== "ammo") throw new Error("storage withdraw");
+  console.log("PASS storage → hotbar");
 
   a.close();
-  console.log("M6 smoke OK");
+  console.log("M6 inventory smoke OK");
 }
 
 main().catch((err) => {

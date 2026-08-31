@@ -1,109 +1,197 @@
-export type ResourceId = "food" | "scrap" | "wood" | "ammo" | "medkit";
+/** Slot-based items, hotbar, inventory, storage, loot containers. */
 
-export type ResourceBag = Record<ResourceId, number>;
+export type ItemId =
+  | "food"
+  | "scrap"
+  | "wood"
+  | "ammo"
+  | "medkit"
+  | "pistol"
+  | "smg"
+  | "ar"
+  | "knife"
+  | "sword"
+  | "axe";
 
-export const RESOURCE_IDS: readonly ResourceId[] = [
+export type ItemKind = "resource" | "gun" | "melee";
+
+export type ItemDef = {
+  id: ItemId;
+  label: string;
+  kind: ItemKind;
+  maxStack: number;
+  /** Hotbar / slot tint (CSS hex). */
+  color: string;
+  /** Links to WEAPONS when kind is gun or melee. */
+  weaponId?: ItemId;
+};
+
+export type ItemStack = { id: ItemId; count: number };
+export type Slot = ItemStack | null;
+
+export const ITEM_IDS: readonly ItemId[] = [
   "food",
   "scrap",
   "wood",
   "ammo",
   "medkit",
+  "pistol",
+  "smg",
+  "ar",
+  "knife",
+  "sword",
+  "axe",
 ] as const;
 
-export const RESOURCE_LABELS: Record<ResourceId, string> = {
-  food: "Food",
-  scrap: "Scrap",
-  wood: "Wood",
-  ammo: "Ammo",
-  medkit: "Medkit",
+export const ITEMS: Record<ItemId, ItemDef> = {
+  food: { id: "food", label: "Food", kind: "resource", maxStack: 16, color: "#c4a35a" },
+  scrap: { id: "scrap", label: "Scrap", kind: "resource", maxStack: 32, color: "#8b949e" },
+  wood: { id: "wood", label: "Wood", kind: "resource", maxStack: 32, color: "#8b5a2b" },
+  ammo: { id: "ammo", label: "Ammo", kind: "resource", maxStack: 48, color: "#d29922" },
+  medkit: { id: "medkit", label: "Medkit", kind: "resource", maxStack: 4, color: "#f85149" },
+  pistol: {
+    id: "pistol",
+    label: "Pistol",
+    kind: "gun",
+    maxStack: 1,
+    color: "#6e7681",
+    weaponId: "pistol",
+  },
+  smg: { id: "smg", label: "SMG", kind: "gun", maxStack: 1, color: "#58a6ff", weaponId: "smg" },
+  ar: { id: "ar", label: "AR", kind: "gun", maxStack: 1, color: "#3d9a5f", weaponId: "ar" },
+  knife: {
+    id: "knife",
+    label: "Knife",
+    kind: "melee",
+    maxStack: 1,
+    color: "#c9d1d9",
+    weaponId: "knife",
+  },
+  sword: {
+    id: "sword",
+    label: "Sword",
+    kind: "melee",
+    maxStack: 1,
+    color: "#a371f7",
+    weaponId: "sword",
+  },
+  axe: { id: "axe", label: "Axe", kind: "melee", maxStack: 1, color: "#db6d28", weaponId: "axe" },
 };
 
-/** Weight per unit toward carry capacity. */
-export const RESOURCE_WEIGHT: Record<ResourceId, number> = {
-  food: 1,
-  scrap: 1,
-  wood: 1,
-  ammo: 1,
-  medkit: 2,
-};
-
-export const LOOT = {
-  carryMaxWeight: 12,
-  searchDuration: 0.85,
+export const INV = {
+  hotbarSize: 6,
+  invSize: 18, // 3 × 6
+  invCols: 6,
+  invRows: 3,
+  storageSize: 36, // 4 × 9
+  storageCols: 9,
+  storageRows: 4,
   interactRange: 2.4,
   storageRange: 2.6,
-  depositDuration: 0.45,
-  withdrawDuration: 0.45,
-  /** Units moved per withdraw action, per resource that has stock. */
-  withdrawChunk: 3,
 } as const;
 
-export function emptyBag(): ResourceBag {
-  return { food: 0, scrap: 0, wood: 0, ammo: 0, medkit: 0 };
+/** Compat alias used by older call sites. */
+export const LOOT = {
+  interactRange: INV.interactRange,
+  storageRange: INV.storageRange,
+  carryMaxWeight: 999,
+  searchDuration: 0,
+  depositDuration: 0,
+  withdrawDuration: 0,
+  withdrawChunk: 0,
+} as const;
+
+export const STORAGE_POS = { x: 3.2, y: 0, z: 0.5 } as const;
+
+export type SlotBag = "hotbar" | "inv" | "storage" | "loot";
+
+export function emptySlots(n: number): Slot[] {
+  return Array.from({ length: n }, () => null);
 }
 
-export function bagWeight(bag: ResourceBag): number {
-  let w = 0;
-  for (const id of RESOURCE_IDS) {
-    w += bag[id] * RESOURCE_WEIGHT[id];
+export function cloneSlots(slots: readonly Slot[]): Slot[] {
+  return slots.map((s) => (s ? { id: s.id, count: s.count } : null));
+}
+
+export function isItemId(raw: unknown): raw is ItemId {
+  return typeof raw === "string" && raw in ITEMS;
+}
+
+export function countItem(slots: readonly Slot[], id: ItemId): number {
+  let n = 0;
+  for (const s of slots) {
+    if (s?.id === id) n += s.count;
   }
-  return w;
+  return n;
 }
 
-export function bagTotal(bag: ResourceBag): number {
-  return RESOURCE_IDS.reduce((sum, id) => sum + bag[id], 0);
-}
-
-export function canFit(bag: ResourceBag, add: Partial<ResourceBag>): boolean {
-  let extra = 0;
-  for (const id of RESOURCE_IDS) {
-    extra += (add[id] ?? 0) * RESOURCE_WEIGHT[id];
+/** Consume up to `amount`. Returns remaining amount that could not be taken. */
+export function consumeItem(slots: Slot[], id: ItemId, amount: number): number {
+  let left = amount;
+  for (let i = 0; i < slots.length && left > 0; i++) {
+    const s = slots[i];
+    if (!s || s.id !== id) continue;
+    const take = Math.min(s.count, left);
+    s.count -= take;
+    left -= take;
+    if (s.count <= 0) slots[i] = null;
   }
-  return bagWeight(bag) + extra <= LOOT.carryMaxWeight + 1e-6;
+  return left;
 }
 
-export function addToBag(bag: ResourceBag, add: Partial<ResourceBag>): ResourceBag {
-  const next = { ...bag };
-  for (const id of RESOURCE_IDS) {
-    const n = add[id] ?? 0;
-    if (n) next[id] += n;
+/** Move / merge / swap stack from → to. Mutates both arrays. */
+export function moveSlots(
+  fromSlots: Slot[],
+  fromIndex: number,
+  toSlots: Slot[],
+  toIndex: number,
+): boolean {
+  if (
+    fromIndex < 0 ||
+    fromIndex >= fromSlots.length ||
+    toIndex < 0 ||
+    toIndex >= toSlots.length
+  ) {
+    return false;
   }
-  return next;
-}
+  if (fromSlots === toSlots && fromIndex === toIndex) return true;
 
-/** Move as much as possible from `from` into `to` without exceeding carry weight. */
-export function transferFill(
-  from: ResourceBag,
-  to: ResourceBag,
-  maxWeight = LOOT.carryMaxWeight,
-): { from: ResourceBag; to: ResourceBag; moved: ResourceBag } {
-  const nextFrom = { ...from };
-  const nextTo = { ...to };
-  const moved = emptyBag();
-  let weight = bagWeight(nextTo);
+  const from = fromSlots[fromIndex];
+  if (!from) return true;
 
-  for (const id of RESOURCE_IDS) {
-    while (nextFrom[id] > 0) {
-      const w = RESOURCE_WEIGHT[id];
-      if (weight + w > maxWeight + 1e-6) break;
-      nextFrom[id] -= 1;
-      nextTo[id] += 1;
-      moved[id] += 1;
-      weight += w;
+  const to = toSlots[toIndex];
+  if (!to) {
+    toSlots[toIndex] = { id: from.id, count: from.count };
+    fromSlots[fromIndex] = null;
+    return true;
+  }
+
+  if (to.id === from.id) {
+    const max = ITEMS[to.id].maxStack;
+    const space = max - to.count;
+    if (space <= 0) {
+      toSlots[toIndex] = from;
+      fromSlots[fromIndex] = to;
+      return true;
     }
+    const move = Math.min(space, from.count);
+    to.count += move;
+    from.count -= move;
+    if (from.count <= 0) fromSlots[fromIndex] = null;
+    return true;
   }
-  return { from: nextFrom, to: nextTo, moved };
+
+  toSlots[toIndex] = from;
+  fromSlots[fromIndex] = to;
+  return true;
 }
 
-export function transferAll(from: ResourceBag, to: ResourceBag): { from: ResourceBag; to: ResourceBag } {
-  const nextTo = { ...to };
-  for (const id of RESOURCE_IDS) {
-    nextTo[id] += from[id];
-  }
-  return { from: emptyBag(), to: nextTo };
-}
-
-export type LootTableEntry = { id: ResourceId; min: number; max: number; chance: number };
+export type LootTableEntry = {
+  id: ItemId;
+  min: number;
+  max: number;
+  chance: number;
+};
 
 export type LootSpotDef = {
   id: string;
@@ -113,7 +201,6 @@ export type LootSpotDef = {
   table: LootTableEntry[];
 };
 
-/** Spots sit outside solid buildings so players can reach them. */
 export const LOOT_SPOTS: readonly LootSpotDef[] = [
   {
     id: "shop",
@@ -122,8 +209,10 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
     z: -6.2,
     table: [
       { id: "food", min: 1, max: 3, chance: 0.9 },
-      { id: "ammo", min: 4, max: 10, chance: 0.7 },
-      { id: "scrap", min: 1, max: 2, chance: 0.35 },
+      { id: "ammo", min: 4, max: 12, chance: 0.75 },
+      { id: "pistol", min: 1, max: 1, chance: 0.35 },
+      { id: "knife", min: 1, max: 1, chance: 0.25 },
+      { id: "scrap", min: 1, max: 2, chance: 0.3 },
     ],
   },
   {
@@ -134,6 +223,7 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
     table: [
       { id: "scrap", min: 2, max: 5, chance: 0.95 },
       { id: "wood", min: 2, max: 4, chance: 0.8 },
+      { id: "axe", min: 1, max: 1, chance: 0.4 },
       { id: "ammo", min: 2, max: 6, chance: 0.3 },
     ],
   },
@@ -144,9 +234,10 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
     z: 9.2,
     table: [
       { id: "food", min: 1, max: 2, chance: 0.75 },
-      { id: "scrap", min: 1, max: 3, chance: 0.6 },
+      { id: "scrap", min: 1, max: 3, chance: 0.55 },
       { id: "medkit", min: 1, max: 1, chance: 0.25 },
-      { id: "ammo", min: 2, max: 5, chance: 0.4 },
+      { id: "knife", min: 1, max: 1, chance: 0.2 },
+      { id: "ammo", min: 2, max: 5, chance: 0.35 },
     ],
   },
   {
@@ -168,6 +259,7 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
     table: [
       { id: "wood", min: 1, max: 3, chance: 0.9 },
       { id: "scrap", min: 1, max: 2, chance: 0.7 },
+      { id: "axe", min: 1, max: 1, chance: 0.15 },
     ],
   },
   {
@@ -176,29 +268,93 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
     x: -6,
     z: -12,
     table: [
-      { id: "ammo", min: 8, max: 16, chance: 0.95 },
-      { id: "scrap", min: 1, max: 2, chance: 0.4 },
-      { id: "medkit", min: 1, max: 1, chance: 0.2 },
+      { id: "ammo", min: 8, max: 20, chance: 0.95 },
+      { id: "pistol", min: 1, max: 1, chance: 0.55 },
+      { id: "smg", min: 1, max: 1, chance: 0.35 },
+      { id: "ar", min: 1, max: 1, chance: 0.18 },
+      { id: "sword", min: 1, max: 1, chance: 0.12 },
+      { id: "medkit", min: 1, max: 1, chance: 0.25 },
     ],
   },
 ];
 
-export const STORAGE_POS = { x: 3.2, y: 0, z: 0.5 } as const;
-
-export function rollLootTable(table: readonly LootTableEntry[]): ResourceBag {
-  const bag = emptyBag();
+/** One slot per successful table roll. */
+export function rollLootStacks(table: readonly LootTableEntry[]): ItemStack[] {
+  const stacks: ItemStack[] = [];
   for (const entry of table) {
     if (Math.random() > entry.chance) continue;
-    const n = entry.min + Math.floor(Math.random() * (entry.max - entry.min + 1));
-    bag[entry.id] += n;
+    const def = ITEMS[entry.id];
+    let n = entry.min + Math.floor(Math.random() * (entry.max - entry.min + 1));
+    n = Math.min(n, def.maxStack);
+    if (n <= 0) continue;
+    stacks.push({ id: entry.id, count: n });
   }
-  return bag;
+  return stacks;
 }
 
+export function startingHotbar(): Slot[] {
+  const slots = emptySlots(INV.hotbarSize);
+  slots[0] = { id: "pistol", count: 1 };
+  slots[1] = { id: "ammo", count: 24 };
+  return slots;
+}
+
+export function startingInventory(): Slot[] {
+  return emptySlots(INV.invSize);
+}
+
+export function formatStack(stack: ItemStack): string {
+  const label = ITEMS[stack.id].label;
+  return stack.count > 1 ? `${label} ×${stack.count}` : label;
+}
+
+// Legacy ResourceBag shims (older scripts / toasts).
+export type ResourceId = "food" | "scrap" | "wood" | "ammo" | "medkit";
+export type ResourceBag = Record<ResourceId, number>;
+export const RESOURCE_IDS: readonly ResourceId[] = [
+  "food",
+  "scrap",
+  "wood",
+  "ammo",
+  "medkit",
+] as const;
+export const RESOURCE_LABELS: Record<ResourceId, string> = {
+  food: "Food",
+  scrap: "Scrap",
+  wood: "Wood",
+  ammo: "Ammo",
+  medkit: "Medkit",
+};
+export function emptyBag(): ResourceBag {
+  return { food: 0, scrap: 0, wood: 0, ammo: 0, medkit: 0 };
+}
+export function bagWeight(_bag: ResourceBag): number {
+  return 0;
+}
+export function bagTotal(bag: ResourceBag): number {
+  return RESOURCE_IDS.reduce((sum, id) => sum + bag[id], 0);
+}
 export function formatBag(bag: ResourceBag): string {
   const parts: string[] = [];
   for (const id of RESOURCE_IDS) {
     if (bag[id] > 0) parts.push(`${RESOURCE_LABELS[id]} ${bag[id]}`);
   }
   return parts.length ? parts.join(", ") : "nothing";
+}
+export function transferFill(
+  from: ResourceBag,
+  to: ResourceBag,
+): { from: ResourceBag; to: ResourceBag; moved: ResourceBag } {
+  return { from: { ...from }, to: { ...to }, moved: emptyBag() };
+}
+export function transferAll(
+  from: ResourceBag,
+  to: ResourceBag,
+): { from: ResourceBag; to: ResourceBag } {
+  const nextTo = { ...to };
+  for (const id of RESOURCE_IDS) nextTo[id] += from[id];
+  return { from: emptyBag(), to: nextTo };
+}
+export function rollLootTable(_table: readonly LootTableEntry[]): ResourceBag {
+  return emptyBag();
 }

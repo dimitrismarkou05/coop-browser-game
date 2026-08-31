@@ -1,6 +1,6 @@
 /** Shared client ↔ server message types. */
 
-import type { ResourceBag } from "./balance/loot.js";
+import type { ItemStack, Slot, SlotBag } from "./balance/loot.js";
 import type { ZombieTypeId } from "./balance/zombies.js";
 
 export type PlayerSnapshot = {
@@ -14,17 +14,17 @@ export type PlayerSnapshot = {
   color: number;
   hp: number;
   maxHp: number;
+  /** Total ammo across hotbar + inventory. */
   ammo: number;
-  inventory: ResourceBag;
-  carryWeight: number;
+  hotbar: Slot[];
+  inventory: Slot[];
+  selectedSlot: number;
   downed: boolean;
   bleedout: number;
   /** 0–1 progress while this player is performing a revive. */
   reviveProgress: number;
   /** True if someone is currently reviving this (downed) player. */
   beingRevived: boolean;
-  /** 0–1 search / storage interact progress. */
-  lootProgress: number;
 };
 
 export type ZombieSnapshot = {
@@ -42,7 +42,10 @@ export type LootNodeSnapshot = {
   label: string;
   x: number;
   z: number;
-  searched: boolean;
+  /** True after loot has been rolled into slots. */
+  opened: boolean;
+  /** Slot count = item stacks (empty slots stay until cleared). */
+  slots: Slot[];
 };
 
 export type GameEvent =
@@ -51,10 +54,15 @@ export type GameEvent =
   | { kind: "kill"; zombieId: string; by: string }
   | { kind: "down"; playerId: string }
   | { kind: "revive"; playerId: string; by: string }
-  | { kind: "loot"; playerId: string; spotId: string; got: ResourceBag }
-  | { kind: "deposit"; playerId: string; moved: ResourceBag }
-  | { kind: "withdraw"; playerId: string; moved: ResourceBag }
+  | { kind: "lootOpen"; playerId: string; spotId: string }
   | { kind: "dev"; message: string };
+
+export type SlotRef = {
+  bag: SlotBag;
+  index: number;
+  /** Required when bag === "loot". */
+  lootId?: string;
+};
 
 export type ClientMessage =
   | { type: "ping"; clientTime: number }
@@ -69,10 +77,13 @@ export type ClientMessage =
       pitch: number;
       shoot?: boolean;
       melee?: boolean;
+      /** Hold E for revive only. */
       interact?: boolean;
       jump?: boolean;
-      withdraw?: boolean;
+      selectedSlot?: number;
     }
+  | { type: "openLoot"; lootId: string }
+  | { type: "invMove"; from: SlotRef; to: SlotRef }
   | { type: "devCommand"; line: string };
 
 export type ServerMessage =
@@ -86,7 +97,7 @@ export type ServerMessage =
       players: PlayerSnapshot[];
       zombies: ZombieSnapshot[];
       lootNodes: LootNodeSnapshot[];
-      storage: ResourceBag;
+      storage: Slot[];
     }
   | {
       type: "snapshot";
@@ -95,7 +106,7 @@ export type ServerMessage =
       players: PlayerSnapshot[];
       zombies: ZombieSnapshot[];
       lootNodes: LootNodeSnapshot[];
-      storage: ResourceBag;
+      storage: Slot[];
       events?: GameEvent[];
     }
   | { type: "playerLeft"; playerId: string }
@@ -103,6 +114,18 @@ export type ServerMessage =
 
 function isRecord(raw: unknown): raw is Record<string, unknown> {
   return typeof raw === "object" && raw !== null;
+}
+
+function parseSlotRef(raw: unknown): SlotRef | null {
+  if (!isRecord(raw) || typeof raw.bag !== "string" || typeof raw.index !== "number") {
+    return null;
+  }
+  if (raw.bag !== "hotbar" && raw.bag !== "inv" && raw.bag !== "storage" && raw.bag !== "loot") {
+    return null;
+  }
+  const ref: SlotRef = { bag: raw.bag, index: raw.index };
+  if (typeof raw.lootId === "string") ref.lootId = raw.lootId;
+  return ref;
 }
 
 export function parseClientMessage(raw: unknown): ClientMessage | null {
@@ -143,10 +166,22 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           melee: Boolean(raw.melee),
           interact: Boolean(raw.interact),
           jump: Boolean(raw.jump),
-          withdraw: Boolean(raw.withdraw),
+          selectedSlot:
+            typeof raw.selectedSlot === "number" ? Math.floor(raw.selectedSlot) : undefined,
         };
       }
       return null;
+    case "openLoot":
+      if (typeof raw.lootId === "string") {
+        return { type: "openLoot", lootId: raw.lootId };
+      }
+      return null;
+    case "invMove": {
+      const from = parseSlotRef(raw.from);
+      const to = parseSlotRef(raw.to);
+      if (from && to) return { type: "invMove", from, to };
+      return null;
+    }
     case "devCommand":
       if (typeof raw.line === "string") {
         return { type: "devCommand", line: raw.line };
@@ -173,3 +208,6 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
       return null;
   }
 }
+
+// silence unused — ItemStack re-export convenience for callers
+export type { ItemStack };

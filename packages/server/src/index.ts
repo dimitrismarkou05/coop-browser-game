@@ -96,6 +96,16 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "openLoot") {
+      rooms.handleOpenLoot(ws, msg.lootId);
+      return;
+    }
+
+    if (msg.type === "invMove") {
+      rooms.handleInvMove(ws, msg.from, msg.to);
+      return;
+    }
+
     if (msg.type === "devCommand") {
       rooms.handleDevCommand(ws, msg.line);
       return;

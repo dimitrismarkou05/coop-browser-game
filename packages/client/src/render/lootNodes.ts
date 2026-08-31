@@ -39,11 +39,17 @@ export class LootNodeRenderer {
         this.byId.set(node.id, mesh);
       }
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      if (node.searched) {
+      const empty = node.opened && node.slots.every((s) => !s);
+      if (empty) {
         mat.color.setHex(0x3a3f46);
         mat.opacity = 0.45;
         mat.transparent = true;
         mesh.scale.set(1, 0.55, 1);
+      } else if (node.opened) {
+        mat.color.setHex(0x7cb88a);
+        mat.opacity = 1;
+        mat.transparent = false;
+        mesh.scale.set(1, 1, 1);
       } else {
         mat.color.setHex(0x5a8f6a);
         mat.opacity = 1;

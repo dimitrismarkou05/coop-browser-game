@@ -24,9 +24,11 @@ export class FpController {
   private shootEdge = false;
   private meleeEdge = false;
   private jumpEdge = false;
+  private interactEdge = false;
   private downed = false;
-  /** When true, gameplay keys are ignored (dev console open). */
   private blocked = false;
+  private selectedSlot = 0;
+  private slotEdge: number | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -72,6 +74,21 @@ export class FpController {
     if (blocked) this.keys.clear();
   }
 
+  setSelectedSlot(n: number): void {
+    this.selectedSlot = n;
+  }
+
+  getSelectedSlot(): number {
+    return this.selectedSlot;
+  }
+
+  /** Consume one-frame E press for inventory open/close. */
+  consumeInteractEdge(): boolean {
+    const v = this.interactEdge;
+    this.interactEdge = false;
+    return v;
+  }
+
   getAxes(): { forward: number; strafe: number } {
     if (this.downed || this.blocked) return { forward: 0, strafe: 0 };
     let forward = 0;
@@ -87,10 +104,6 @@ export class FpController {
     return !this.blocked && this.keys.has("KeyE");
   }
 
-  isWithdrawHeld(): boolean {
-    return !this.blocked && !this.downed && this.keys.has("KeyR");
-  }
-
   nextInputPacket(): {
     seq: number;
     forward: number;
@@ -101,7 +114,7 @@ export class FpController {
     melee: boolean;
     interact: boolean;
     jump: boolean;
-    withdraw: boolean;
+    selectedSlot: number;
   } {
     const axes = this.getAxes();
     const shoot = this.shootEdge;
@@ -110,6 +123,10 @@ export class FpController {
     this.shootEdge = false;
     this.meleeEdge = false;
     this.jumpEdge = false;
+    if (this.slotEdge !== null) {
+      this.selectedSlot = this.slotEdge;
+      this.slotEdge = null;
+    }
     this.seq += 1;
     return {
       seq: this.seq,
@@ -121,12 +138,12 @@ export class FpController {
       melee,
       interact: this.isInteractHeld(),
       jump,
-      withdraw: this.isWithdrawHeld(),
+      selectedSlot: this.selectedSlot,
     };
   }
 
   predict(dt: number, solids: readonly Aabb[]): void {
-    if (this.downed) return;
+    if (this.downed || this.blocked) return;
     const axes = this.getAxes();
     const moved = applyPlayerMovement(
       this.state.x,
@@ -174,7 +191,7 @@ export class FpController {
   }
 
   private readonly onKeyDown = (e: KeyboardEvent) => {
-    if (this.blocked) return;
+    if (this.blocked && e.code !== "KeyE") return;
     if (
       [
         "KeyW",
@@ -187,17 +204,30 @@ export class FpController {
         "ArrowRight",
         "KeyE",
         "KeyF",
-        "KeyR",
         "Space",
+        "Digit1",
+        "Digit2",
+        "Digit3",
+        "Digit4",
+        "Digit5",
+        "Digit6",
       ].includes(e.code)
     ) {
       e.preventDefault();
     }
+    if (e.code === "KeyE" && !e.repeat) {
+      this.interactEdge = true;
+    }
+    if (this.blocked) return;
     if (e.code === "KeyF" && !e.repeat && !this.downed) {
       this.meleeEdge = true;
     }
     if (e.code === "Space" && !e.repeat && !this.downed) {
       this.jumpEdge = true;
+    }
+    const digit = e.code.match(/^Digit([1-6])$/);
+    if (digit && !e.repeat) {
+      this.slotEdge = Number(digit[1]) - 1;
     }
     this.keys.add(e.code);
   };
