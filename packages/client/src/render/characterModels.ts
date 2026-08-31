@@ -31,10 +31,12 @@ export type HumanoidParts = {
   shirtMats: THREE.MeshStandardMaterial[];
 };
 
-/** Low-poly humanoid: head, torso, hips, limbs. */
+/** Low-poly humanoid: head, torso, hips, limbs.
+ * Art faces +Z; body is yaw-offset so game forward (−Z / camera) matches. */
 export function createHumanoid(shirtColor: number, skinColor = 0xc68642): HumanoidParts {
   const root = new THREE.Group();
   const body = new THREE.Group();
+  body.rotation.y = Math.PI;
   root.add(body);
 
   const shirtMats: THREE.MeshStandardMaterial[] = [];
@@ -82,6 +84,7 @@ export function createHumanoid(shirtColor: number, skinColor = 0xc68642): Humano
 export function createZombieModel(baseColor: number): HumanoidParts {
   const root = new THREE.Group();
   const body = new THREE.Group();
+  body.rotation.y = Math.PI;
   root.add(body);
 
   const shirtMats: THREE.MeshStandardMaterial[] = [];

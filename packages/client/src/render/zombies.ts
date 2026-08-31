@@ -56,6 +56,7 @@ export class ZombieRenderer {
         visual.body.position.y = Math.abs(Math.sin(visual.walkPhase)) * 0.05;
         visual.body.rotation.z = Math.sin(visual.walkPhase) * 0.06;
         visual.body.rotation.x = 0.12 + Math.sin(visual.walkPhase * 0.5) * 0.04;
+        visual.body.rotation.y = Math.PI;
       }
     }
   }

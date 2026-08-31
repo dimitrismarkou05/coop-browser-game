@@ -125,6 +125,7 @@ export class RemotePlayers {
       for (const m of remote.shirtMats) m.color.setHex(player.color);
 
       remote.body.rotation.x = player.downed ? Math.PI / 2 : 0;
+      remote.body.rotation.y = Math.PI;
       remote.body.position.y = player.downed ? 0.15 : 0;
       if (remote.weapon) remote.weapon.visible = !player.downed;
       remote.label.position.y = player.downed ? 1.0 : PLAYER.height + 0.25;
@@ -157,9 +158,11 @@ export class RemotePlayers {
         remote.walkPhase += dt * 10;
         remote.body.position.y = Math.abs(Math.sin(remote.walkPhase)) * 0.04;
         remote.body.rotation.z = Math.sin(remote.walkPhase) * 0.04;
+        remote.body.rotation.y = Math.PI;
       } else if (!remote.downed) {
         remote.body.position.y += (0 - remote.body.position.y) * 0.2;
         remote.body.rotation.z *= 0.85;
+        remote.body.rotation.y = Math.PI;
       }
     }
   }
