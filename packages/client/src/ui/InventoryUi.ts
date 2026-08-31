@@ -5,6 +5,7 @@ import {
   type SlotBag,
   type SlotRef,
 } from "@coop/shared";
+import { itemIconUrl } from "./itemIcons";
 
 export type InvUiMode = "closed" | "player" | "storage" | "loot";
 
@@ -223,10 +224,18 @@ export class InventoryUi {
     if (slot) {
       cell.style.setProperty("--item", ITEMS[slot.id].color);
       cell.classList.add("filled");
-      const label = document.createElement("span");
-      label.className = "slot-label";
-      label.textContent = slotLabel(slot);
-      cell.appendChild(label);
+      const icon = document.createElement("img");
+      icon.className = "slot-icon";
+      icon.src = itemIconUrl(slot.id);
+      icon.alt = ITEMS[slot.id].label;
+      icon.draggable = false;
+      cell.appendChild(icon);
+      if (slot.count > 1) {
+        const count = document.createElement("span");
+        count.className = "slot-count";
+        count.textContent = String(slot.count);
+        cell.appendChild(count);
+      }
     }
 
     if (!interactive) return cell;

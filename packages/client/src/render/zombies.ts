@@ -32,8 +32,12 @@ export class ZombieRenderer {
     for (const [id, visual] of this.visuals) {
       if (!seen.has(id)) {
         this.scene.remove(visual.root);
-        visual.body.geometry.dispose();
-        (visual.body.material as THREE.Material).dispose();
+        visual.root.traverse((o) => {
+          if (o instanceof THREE.Mesh) {
+            o.geometry.dispose();
+            (o.material as THREE.Material).dispose();
+          }
+        });
         this.visuals.delete(id);
       }
     }

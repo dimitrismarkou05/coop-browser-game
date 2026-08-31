@@ -21,6 +21,7 @@ import { ClientSocket } from "./net/ClientSocket";
 import { LootNodeRenderer } from "./render/lootNodes";
 import { buildPlaceholderWorld } from "./render/placeholders";
 import { RemotePlayers } from "./render/remoteAvatars";
+import { Viewmodel } from "./render/viewmodel";
 import { ZombieRenderer } from "./render/zombies";
 import { DevConsole } from "./ui/DevConsole";
 import { InventoryUi } from "./ui/InventoryUi";
@@ -129,11 +130,21 @@ function flashLootToast(text: string): void {
   window.setTimeout(() => lootToastEl.classList.remove("on"), 2200);
 }
 
-function handleEvents(events: GameEvent[] | undefined, you: string): void {
+function handleEvents(
+  events: GameEvent[] | undefined,
+  you: string,
+  viewmodel?: Viewmodel,
+): void {
   if (!events) return;
   for (const ev of events) {
     if ((ev.kind === "shot" || ev.kind === "melee") && ev.playerId === you && ev.hit) {
       flashHitMarker();
+    }
+    if (ev.kind === "shot" && ev.playerId === you) {
+      viewmodel?.playShot();
+    }
+    if (ev.kind === "melee" && ev.playerId === you) {
+      viewmodel?.playMelee();
     }
     if (ev.kind === "lootOpen" && ev.playerId === you) {
       flashLootToast("Loot container opened");
@@ -279,6 +290,12 @@ function startGame(
   const lootVisuals = new LootNodeRenderer(scene);
   lootVisuals.sync(initialLoot);
 
+  const viewmodel = new Viewmodel();
+  camera.add(viewmodel.root);
+  scene.add(camera);
+  const held0 = me?.hotbar[me.selectedSlot ?? 0];
+  viewmodel.setItem(held0?.id ?? null);
+
   const fp = new FpController(renderer.domElement, {
     x: me?.x ?? 0,
     y: me?.y ?? 0,
@@ -304,6 +321,7 @@ function startGame(
     onOpenChange: (open) => {
       menuBlocks = open;
       syncBlock();
+      viewmodel.setVisible(!open && !consoleUi.isOpen());
       if (open && document.pointerLockElement) {
         document.exitPointerLock();
       }
@@ -487,9 +505,10 @@ function startGame(
       fp.setSelectedSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
       ammoEl.textContent = String(self.ammo);
-      const activeGun = self.hotbar[self.selectedSlot];
+      const active = self.hotbar[self.selectedSlot];
+      viewmodel.setItem(active?.id ?? null);
       const gunHint =
-        activeGun && ITEMS[activeGun.id].kind === "gun" ? ITEMS[activeGun.id].label : "no gun";
+        active && ITEMS[active.id].kind === "gun" ? ITEMS[active.id].label : "no gun";
       ammoEl.textContent = `${self.ammo} · ${gunHint}`;
 
       const lootSlots =
@@ -509,7 +528,7 @@ function startGame(
     remotes.sync(msg.players, active.playerId);
     zombies.sync(msg.zombies);
     lootVisuals.sync(msg.lootNodes);
-    handleEvents(msg.events, active.playerId);
+    handleEvents(msg.events, active.playerId, viewmodel);
   }
 
   function frame(now: number): void {
@@ -520,6 +539,12 @@ function startGame(
     fp.predict(dt, solids);
     remotes.update(dt);
     zombies.update(dt);
+
+    const self = latestPlayers.find((p) => p.id === active.playerId);
+    const axes = fp.getAxes();
+    const moving = axes.forward !== 0 || axes.strafe !== 0;
+    viewmodel.setVisible(!invUi.isOpen && !consoleUi.isOpen() && !self?.downed);
+    viewmodel.update(dt, moving && !invUi.isOpen);
 
     inputAcc += dt;
     if (inputAcc >= 1 / 30) {
@@ -541,7 +566,6 @@ function startGame(
     }
 
     // Poll E edge between snapshots so UI feels snappy.
-    const self = latestPlayers.find((p) => p.id === active.playerId);
     if (self) handleInteractEdge(self);
 
     camera.position.set(
