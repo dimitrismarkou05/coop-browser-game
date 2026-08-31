@@ -18,7 +18,7 @@ export class DevConsole {
         <span class="dev-prompt">&gt;</span>
         <input class="dev-input" type="text" spellcheck="false" autocomplete="off" />
       </div>
-      <div class="dev-hint">\` toggle · time · time watch · spawn zombie · help</div>
+      <div class="dev-hint">\` toggle · time drift · time watch · spawn zombie · help</div>
     `;
     document.body.appendChild(this.root);
     this.logEl = this.root.querySelector(".dev-log")!;

@@ -495,6 +495,15 @@ function startGame(
   const consoleUi = new DevConsole({
     onSubmit: (line) => {
       const cmd = line.trim().toLowerCase();
+      const driftWatch = cmd.match(/^time drift watch(?: (\d+))?$/);
+      if (driftWatch) {
+        startDriftWatch(Number(driftWatch[1] ?? 8));
+        return;
+      }
+      if (cmd === "time drift") {
+        printTimeDrift();
+        return;
+      }
       const watch = cmd.match(/^time watch(?: (\d+))?$/);
       if (watch) {
         startTimeWatch(Number(watch[1] ?? 8));
@@ -540,15 +549,109 @@ function startGame(
   let lastSnapAt = 0;
   let snapGapMs: number[] = [];
   let pendingTimeStats = false;
+  let pendingDriftServer = false;
   let timeWatchTimer: ReturnType<typeof setInterval> | null = null;
+  let driftWatchTimer: ReturnType<typeof setInterval> | null = null;
+  let inputSendTimes: number[] = [];
+  let driftWatchMax = 0;
 
-  function snapshotRateLine(): string {
-    if (snapGapMs.length < 2) return "client snapshots: collecting…";
+  function inputRateLine(): string {
+    const now = performance.now();
+    inputSendTimes = inputSendTimes.filter((t) => now - t < 2000);
+    if (inputSendTimes.length < 2) return "input send: collecting…";
+    const hz = inputSendTimes.length / 2;
+    return `input send ~${hz.toFixed(0)} Hz (2s window)`;
+  }
+
+  function snapshotStats(): { line: string; hz: number; jitter: number } | null {
+    if (snapGapMs.length < 2) return null;
     const avg = snapGapMs.reduce((a, b) => a + b, 0) / snapGapMs.length;
     const hz = 1000 / avg;
     const min = Math.min(...snapGapMs);
     const max = Math.max(...snapGapMs);
-    return `client snapshots ~${hz.toFixed(1)} Hz (${min.toFixed(0)}–${max.toFixed(0)} ms, tick=${lastSnapTick})`;
+    return {
+      line: `snapshots ~${hz.toFixed(1)} Hz (${min.toFixed(0)}–${max.toFixed(0)} ms, tick=${lastSnapTick})`,
+      hz,
+      jitter: max - min,
+    };
+  }
+
+  function snapshotRateLine(): string {
+    return snapshotStats()?.line ?? "client snapshots: collecting…";
+  }
+
+  function driftVerdict(distXZ: number, moving: boolean, snap: NonNullable<ReturnType<typeof snapshotStats>>, lastInputMs?: number): string {
+    const issues: string[] = [];
+    if (snap.hz < 14 || snap.jitter > 80) {
+      issues.push("SERVER/HOST (snapshot jitter or low Hz)");
+    }
+    if (lastInputMs !== undefined && lastInputMs >= 400) {
+      issues.push("SERVER/NETWORK (input packets late)");
+    }
+    if (distXZ >= 5) {
+      issues.push("NETCODE (hard reconcile snap zone)");
+    } else if (distXZ > 0.35 && moving) {
+      issues.push("NETCODE (client ahead of server while moving)");
+    }
+    if (issues.length === 0) return "OK — infra and drift look nominal";
+    return issues.join(" · ");
+  }
+
+  function printTimeDrift(fetchServer = true): void {
+    const self = latestPlayers.find((p) => p.id === active.playerId);
+    if (!self) {
+      consoleUi.append("time drift: no player snapshot yet", "err");
+      return;
+    }
+
+    const distXZ = Math.hypot(fp.state.x - self.x, fp.state.z - self.z);
+    const dy = fp.state.y - self.y;
+    driftWatchMax = Math.max(driftWatchMax, distXZ);
+    const moving = fp.isMoving();
+    const snap = snapshotStats();
+    const rtt = rttEl.textContent ?? "—";
+
+    consoleUi.append(
+      `pos drift xz=${distXZ.toFixed(2)}m y=${dy.toFixed(2)}m · client=(${fp.state.x.toFixed(1)}, ${fp.state.z.toFixed(1)}) server=(${self.x.toFixed(1)}, ${self.z.toFixed(1)})`,
+      "info",
+    );
+    consoleUi.append(`${inputRateLine()} · moving=${moving} · rtt=${rtt}`, "info");
+    if (snap) {
+      consoleUi.append(snap.line, "info");
+      if (!fetchServer) {
+        consoleUi.append(
+          `verdict: ${driftVerdict(distXZ, moving, snap)}`,
+          "info",
+        );
+      }
+    } else {
+      consoleUi.append("snapshots: collecting… (move around briefly)", "info");
+    }
+
+    if (fetchServer) {
+      pendingDriftServer = true;
+      net.sendDev("time");
+    }
+  }
+
+  function startDriftWatch(sec: number): void {
+    if (driftWatchTimer !== null) clearInterval(driftWatchTimer);
+    driftWatchMax = 0;
+    const duration = Math.max(3, Math.min(60, sec));
+    consoleUi.append(`time drift watch ${duration}s…`, "info");
+    printTimeDrift(false);
+    const endAt = performance.now() + duration * 1000;
+    driftWatchTimer = setInterval(() => {
+      if (!alive || performance.now() >= endAt) {
+        if (driftWatchTimer !== null) clearInterval(driftWatchTimer);
+        driftWatchTimer = null;
+        consoleUi.append(`time drift watch done · peak xz drift=${driftWatchMax.toFixed(2)}m`, "info");
+        pendingDriftServer = true;
+        net.sendDev("time");
+        return;
+      }
+      printTimeDrift(false);
+    }, 1000);
   }
 
   function startTimeWatch(sec: number): void {
@@ -1020,6 +1123,7 @@ function startGame(
         }
         invUi.setSelectedSlot(packet.selectedSlot);
         net.sendInput(packet);
+        inputSendTimes.push(performance.now());
       }
     }
 
@@ -1047,6 +1151,22 @@ function startGame(
   return {
     onSnapshot,
     onDevResult(ok: boolean, message: string) {
+      if (pendingDriftServer && ok && message.startsWith("epoch=")) {
+        pendingDriftServer = false;
+        consoleUi.append(`server · ${message}`, "ok");
+        const lastInput = Number(message.match(/lastInput=(\d+)ms/)?.[1] ?? NaN);
+        const self = latestPlayers.find((p) => p.id === active.playerId);
+        const snap = snapshotStats();
+        if (self && snap) {
+          const distXZ = Math.hypot(fp.state.x - self.x, fp.state.z - self.z);
+          const verdict = driftVerdict(distXZ, fp.isMoving(), snap, lastInput);
+          consoleUi.append(
+            `verdict (with server): ${verdict}`,
+            verdict.startsWith("OK") ? "ok" : "err",
+          );
+        }
+        return;
+      }
       consoleUi.append(message, ok ? "ok" : "err");
       if (pendingTimeStats && ok && message.startsWith("epoch=")) {
         pendingTimeStats = false;
@@ -1055,6 +1175,7 @@ function startGame(
     },
     dispose() {
       if (timeWatchTimer !== null) clearInterval(timeWatchTimer);
+      if (driftWatchTimer !== null) clearInterval(driftWatchTimer);
       alive = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onGameKeyDown);

@@ -871,7 +871,7 @@ export class Room {
       return {
         ok: true,
         message:
-          "time | time watch [sec] | spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies | invasion start | invasion skip | give wood|scrap <n>",
+          "time | time drift | time watch [sec] | time drift watch [sec] | spawn zombie [walker|runner|bruiser] | kill player <name> | kill players | kill zombies <n> | kill all zombies | invasion start | invasion skip | give wood|scrap <n>",
       };
     }
 
