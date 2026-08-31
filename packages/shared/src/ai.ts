@@ -1,5 +1,15 @@
 import { moveWithAabbCollision, type Aabb } from "./math.js";
 
+/** Yaw so lookDirection(yaw,0) / model forward (−Z) points toward target. */
+export function yawToward(
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+): number {
+  return Math.atan2(-(toX - fromX), -(toZ - fromZ));
+}
+
 /** Move an entity toward a world XZ target with AABB collision. */
 export function moveToward(
   x: number,
@@ -14,7 +24,7 @@ export function moveToward(
   const dx = targetX - x;
   const dz = targetZ - z;
   const dist = Math.hypot(dx, dz);
-  const yaw = Math.atan2(dx, -dz);
+  const yaw = yawToward(x, z, targetX, targetZ);
 
   if (dist < 0.001) {
     return { x, z, yaw };

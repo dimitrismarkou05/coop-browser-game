@@ -53,6 +53,8 @@ import {
   warningDurationSec,
   waveSpawns,
   workbenchTierDef,
+  yawToward,
+  zombieHitCapsule,
   type Aabb,
   type BaseSnapshot,
   type GameEvent,
@@ -1134,14 +1136,15 @@ export class Room {
     let bestT = maxT;
     for (const zombie of this.zombies.values()) {
       const def = ZOMBIE_DEFS[zombie.kind];
+      const hit = zombieHitCapsule(def);
       const t = raycastCapsuleXZ(
         origin,
         dir,
         zombie.x,
         zombie.z,
-        def.radius,
-        0,
-        def.height + 0.35,
+        hit.radius,
+        hit.minY,
+        hit.maxY,
         maxT,
       );
       if (t !== null && t < bestT) {
@@ -1576,7 +1579,7 @@ export class Room {
           zombie.z = moved.z;
           zombie.yaw = moved.yaw;
         } else {
-          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
+          zombie.yaw = yawToward(zombie.x, zombie.z, target.x, target.z);
           if (zombie.attackCd <= 0 && !target.downed) {
             this.hurtPlayer(target, def.damage);
             zombie.attackCd = def.attackCooldown;
@@ -1600,7 +1603,7 @@ export class Room {
           zombie.z = moved.z;
           zombie.yaw = moved.yaw;
         } else {
-          zombie.yaw = Math.atan2(layout.x - zombie.x, -(layout.z - zombie.z));
+          zombie.yaw = yawToward(zombie.x, zombie.z, layout.x, layout.z);
           if (zombie.attackCd <= 0) {
             const dmg = zombie.kind === "bruiser" ? WALL_HIT_BRUISER : WALL_HIT_OTHER;
             this.damageWall(wallHit.wall, dmg);
@@ -1634,7 +1637,7 @@ export class Room {
           zombie.z = moved.z;
           zombie.yaw = moved.yaw;
         } else {
-          zombie.yaw = Math.atan2(target.x - zombie.x, -(target.z - zombie.z));
+          zombie.yaw = yawToward(zombie.x, zombie.z, target.x, target.z);
           if (zombie.attackCd <= 0 && !target.downed) {
             this.hurtPlayer(target, def.damage);
             zombie.attackCd = def.attackCooldown;

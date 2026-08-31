@@ -91,9 +91,8 @@ export function raycastSphere(
 }
 
 /**
- * Ray vs vertical capsule (infinite XZ circle clipped to [minY, maxY]).
- * Accepts any t on the cylinder segment whose Y lies in the height band
- * (not only the discrete entry/exit samples — fixes near-miss headshots).
+ * Ray vs vertical capsule (XZ circle clipped to [minY, maxY]).
+ * Intersects height-band with the cylinder chord (not only entry/exit samples).
  */
 export function raycastCapsuleXZ(
   origin: Vec3,
@@ -136,33 +135,22 @@ export function raycastCapsuleXZ(
 
   const tLo = Math.max(0, tEnter);
   const tHi = Math.min(maxDist, tExit);
-  if (tLo > tHi) return null;
+  if (tLo > tHi + 1e-8) return null;
 
-  const y0 = origin.y + dir.y * tLo;
-  const y1 = origin.y + dir.y * tHi;
   const dy = dir.y;
+  const yAt = (t: number) => origin.y + dy * t;
+  const yLo = yAt(tLo);
+  if (yLo >= minY && yLo <= maxY) return tLo;
+  if (Math.abs(dy) < 1e-8) return null;
 
-  // Entire segment already in band — take earliest.
-  if (y0 >= minY && y0 <= maxY) return tLo;
-  if (Math.abs(dy) < 1e-8) {
-    // Horizontal ray: either whole segment is in band or none.
-    return y0 >= minY && y0 <= maxY ? tLo : null;
-  }
-
-  // Clip segment to Y planes and take earliest valid t.
-  let best: number | null = null;
-  const candidates = [tLo, tHi];
-  if (dy !== 0) {
-    candidates.push((minY - origin.y) / dy);
-    candidates.push((maxY - origin.y) / dy);
-  }
-  for (const t of candidates) {
-    if (t < tLo - 1e-6 || t > tHi + 1e-6) continue;
-    const y = origin.y + dy * t;
-    if (y < minY - 1e-4 || y > maxY + 1e-4) continue;
-    if (best === null || t < best) best = Math.max(tLo, Math.min(tHi, t));
-  }
-  return best;
+  const tMinPlane = (minY - origin.y) / dy;
+  const tMaxPlane = (maxY - origin.y) / dy;
+  const yEnter = Math.min(tMinPlane, tMaxPlane);
+  const yExit = Math.max(tMinPlane, tMaxPlane);
+  const t0 = Math.max(tLo, yEnter);
+  const t1 = Math.min(tHi, yExit);
+  if (t0 > t1) return null;
+  return t0;
 }
 
 export function forwardFlat(yaw: number): { x: number; z: number } {
