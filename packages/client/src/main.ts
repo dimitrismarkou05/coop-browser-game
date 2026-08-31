@@ -185,6 +185,8 @@ function phaseLabel(phase: InvasionSnapshot["phase"]): string {
       return "WAVE";
     case "resolve":
       return "PREP";
+    default:
+      return "PREP";
   }
 }
 

@@ -1,0 +1,6 @@
+{
+  "buildCommand": "npm run build -w @coop/shared && npm run build -w @coop/client",
+  "outputDirectory": "packages/client/dist",
+  "installCommand": "npm install",
+  "framework": "vite"
+}
