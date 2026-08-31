@@ -36,7 +36,7 @@ export const PLACEHOLDER_BUILDINGS: readonly MapBuilding[] = [
     id: "safehouse-pad",
     label: "Safehouse",
     color: 0x3d9a5f,
-    box: boxFromCenter(0, 0, 10, 0.15, 10),
+    box: boxFromCenter(0, 0, 17, 0.15, 17),
     solid: false,
   },
   {
@@ -165,10 +165,10 @@ export function isInsideZombiePen(x: number, z: number): boolean {
 /** Spawn inside the safehouse (inside barricades). */
 export const SPAWN_POSITION = { x: 0, y: 0, z: 0 } as const;
 
-/** Per-slot offsets so players don't stack on join (stay inside walls ±4.6). */
+/** Per-slot offsets so players don't stack on join (inside expanded walls ±8). */
 export const SPAWN_OFFSETS: readonly { x: number; z: number }[] = [
-  { x: 1.8, z: 1.5 },
-  { x: -1.8, z: 1.5 },
-  { x: 1.8, z: -1.5 },
-  { x: -1.8, z: -1.5 },
+  { x: 2.2, z: 2.0 },
+  { x: -2.2, z: 2.0 },
+  { x: 2.2, z: -2.0 },
+  { x: -2.2, z: -2.0 },
 ];

@@ -50,6 +50,7 @@ import {
   storageTierDef,
   wallAabb,
   wallDoorCenter,
+  wallHasDoor,
   wallSolidAabbs,
   wallTierDef,
   warningDurationSec,
@@ -334,7 +335,9 @@ export class Room {
 
   snapshotInvasion(): InvasionSnapshot {
     let phaseEndsIn = this.phaseTimer;
-    if (this.phase === "waves" && this.cleanupTimer !== null) {
+    if (this.phase === "prep") {
+      phaseEndsIn = -1;
+    } else if (this.phase === "waves" && this.cleanupTimer !== null) {
       phaseEndsIn = this.cleanupTimer;
     }
     let readyCount = 0;
@@ -368,6 +371,14 @@ export class Room {
     const player = this.players.get(playerId);
     if (!player || player.downed) return;
     player.ready = ready;
+    // Start as soon as everyone is ready (no prep countdown).
+    if (
+      this.phase === "prep" &&
+      this.players.size >= 1 &&
+      [...this.players.values()].every((p) => p.ready)
+    ) {
+      this.enterWarning();
+    }
   }
 
   repairWall(playerId: string, wallId: WallId): void {
@@ -393,6 +404,7 @@ export class Room {
     const wall = this.walls.get(wallId);
     if (!player || !wall || player.downed) return;
     if (wall.hp <= 0) return;
+    if (!wallHasDoor(wallId)) return;
     const door = wallDoorCenter(wallId);
     if (distXZ(player.x, player.z, door.x, door.z) > BASE.doorInteractRange) return;
 
@@ -1508,12 +1520,7 @@ export class Room {
 
   private updateInvasion(dt: number): void {
     if (this.phase === "prep") {
-      this.phaseTimer -= dt;
-      const allReady =
-        this.players.size >= 1 && [...this.players.values()].every((p) => p.ready);
-      if (allReady || this.phaseTimer <= 0) {
-        this.enterWarning();
-      }
+      // Indefinite prep — only all-ready (handled in setReady) starts the invasion.
       return;
     }
 

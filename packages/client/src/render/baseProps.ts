@@ -2,6 +2,7 @@ import {
   BASE,
   BASE_LAYOUT,
   WALL_IDS,
+  wallHasDoor,
   type BaseSnapshot,
   type WallId,
 } from "@coop/shared";
@@ -22,13 +23,15 @@ function lerpColor(a: number, b: number, t: number): number {
 
 type WallVisual = {
   left: THREE.Mesh;
-  right: THREE.Mesh;
-  door: THREE.Mesh;
-  doorPivot: THREE.Group;
+  right: THREE.Mesh | null;
+  door: THREE.Mesh | null;
+  doorPivot: THREE.Group | null;
+  solid: THREE.Mesh | null;
   horizontal: boolean;
+  hasDoor: boolean;
 };
 
-/** Barricade walls (with player doors), core, workbench, generator. */
+/** Barricade walls (doors on N/S/E), core, workbench, generator, storage. */
 export class BaseProps {
   private readonly group = new THREE.Group();
   private readonly walls = new Map<WallId, WallVisual>();
@@ -45,7 +48,7 @@ export class BaseProps {
 
     const core = BASE_LAYOUT.core;
     this.core = new THREE.Mesh(
-      new THREE.CylinderGeometry(core.radius * 0.55, core.radius * 0.7, 2.4, 10),
+      new THREE.CylinderGeometry(core.radius * 0.85, core.radius, 2.5, 12),
       new THREE.MeshStandardMaterial({
         color: 0x58a6ff,
         roughness: 0.35,
@@ -54,7 +57,7 @@ export class BaseProps {
         emissiveIntensity: 0.35,
       }),
     );
-    this.core.position.set(core.x, 1.2, core.z);
+    this.core.position.set(core.x, 1.25, core.z);
     this.group.add(this.core);
 
     const wb = BASE_LAYOUT.workbench;
@@ -86,22 +89,43 @@ export class BaseProps {
     this.generator.add(vent);
   }
 
+  private wallMat(): THREE.MeshStandardMaterial {
+    return new THREE.MeshStandardMaterial({
+      color: 0x3d9a5f,
+      roughness: 0.8,
+      metalness: 0.05,
+    });
+  }
+
   private buildWall(id: WallId): WallVisual {
     const layout = BASE_LAYOUT.walls[id];
-    const doorW = BASE.doorWidth;
+    const hasDoor = wallHasDoor(id);
     const horizontal = layout.sx >= layout.sz;
-    const mat = () =>
-      new THREE.MeshStandardMaterial({
-        color: 0x3d9a5f,
-        roughness: 0.8,
-        metalness: 0.05,
-      });
+
+    if (!hasDoor) {
+      const solid = new THREE.Mesh(
+        new THREE.BoxGeometry(layout.sx, layout.sy, layout.sz),
+        this.wallMat(),
+      );
+      solid.position.set(layout.x, layout.sy / 2, layout.z);
+      this.group.add(solid);
+      return {
+        left: solid,
+        right: null,
+        door: null,
+        doorPivot: null,
+        solid,
+        horizontal,
+        hasDoor: false,
+      };
+    }
+
+    const doorW = BASE.doorWidth;
     const doorMat = new THREE.MeshStandardMaterial({
       color: 0x8b5a2b,
       roughness: 0.7,
       metalness: 0.1,
     });
-
     let left: THREE.Mesh;
     let right: THREE.Mesh;
     let door: THREE.Mesh;
@@ -109,31 +133,44 @@ export class BaseProps {
 
     if (horizontal) {
       const side = (layout.sx - doorW) / 2;
-      left = new THREE.Mesh(new THREE.BoxGeometry(side, layout.sy, layout.sz), mat());
-      right = new THREE.Mesh(new THREE.BoxGeometry(side, layout.sy, layout.sz), mat());
+      left = new THREE.Mesh(new THREE.BoxGeometry(side, layout.sy, layout.sz), this.wallMat());
+      right = new THREE.Mesh(new THREE.BoxGeometry(side, layout.sy, layout.sz), this.wallMat());
       left.position.set(layout.x - layout.sx / 2 + side / 2, layout.sy / 2, layout.z);
       right.position.set(layout.x + layout.sx / 2 - side / 2, layout.sy / 2, layout.z);
 
-      door = new THREE.Mesh(new THREE.BoxGeometry(doorW, layout.sy * 0.92, layout.sz * 0.85), doorMat);
-      // Hinge on west edge of door opening
+      door = new THREE.Mesh(
+        new THREE.BoxGeometry(doorW, layout.sy * 0.92, layout.sz * 0.85),
+        doorMat,
+      );
       doorPivot.position.set(layout.x - doorW / 2, 0, layout.z);
       door.position.set(doorW / 2, layout.sy / 2, 0);
       doorPivot.add(door);
     } else {
       const side = (layout.sz - doorW) / 2;
-      left = new THREE.Mesh(new THREE.BoxGeometry(layout.sx, layout.sy, side), mat());
-      right = new THREE.Mesh(new THREE.BoxGeometry(layout.sx, layout.sy, side), mat());
+      left = new THREE.Mesh(new THREE.BoxGeometry(layout.sx, layout.sy, side), this.wallMat());
+      right = new THREE.Mesh(new THREE.BoxGeometry(layout.sx, layout.sy, side), this.wallMat());
       left.position.set(layout.x, layout.sy / 2, layout.z - layout.sz / 2 + side / 2);
       right.position.set(layout.x, layout.sy / 2, layout.z + layout.sz / 2 - side / 2);
 
-      door = new THREE.Mesh(new THREE.BoxGeometry(layout.sx * 0.85, layout.sy * 0.92, doorW), doorMat);
+      door = new THREE.Mesh(
+        new THREE.BoxGeometry(layout.sx * 0.85, layout.sy * 0.92, doorW),
+        doorMat,
+      );
       doorPivot.position.set(layout.x, 0, layout.z - doorW / 2);
       door.position.set(0, layout.sy / 2, doorW / 2);
       doorPivot.add(door);
     }
 
     this.group.add(left, right, doorPivot);
-    return { left, right, door, doorPivot, horizontal };
+    return {
+      left,
+      right,
+      door,
+      doorPivot,
+      solid: null,
+      horizontal,
+      hasDoor: true,
+    };
   }
 
   sync(base: BaseSnapshot): void {
@@ -141,24 +178,31 @@ export class BaseProps {
       const visual = this.walls.get(wall.id);
       if (!visual) continue;
       const broken = wall.broken || wall.hp <= 0;
-      visual.left.visible = !broken;
-      visual.right.visible = !broken;
-      visual.doorPivot.visible = !broken;
-
-      if (broken) continue;
-
       const ratio = wall.maxHp > 0 ? Math.max(0, Math.min(1, wall.hp / wall.maxHp)) : 0;
       const color = lerpColor(0xf85149, 0x3d9a5f, ratio);
-      for (const mesh of [visual.left, visual.right]) {
+
+      const tint = (mesh: THREE.Mesh | null) => {
+        if (!mesh) return;
+        mesh.visible = !broken;
+        if (broken) return;
         const m = mesh.material as THREE.MeshStandardMaterial;
         m.color.setHex(color);
         m.opacity = 0.55 + ratio * 0.45;
         m.transparent = m.opacity < 1;
+      };
+
+      if (!visual.hasDoor) {
+        tint(visual.solid);
+        continue;
       }
+
+      tint(visual.left);
+      tint(visual.right);
+      if (visual.doorPivot) visual.doorPivot.visible = !broken;
+      if (broken || !visual.door || !visual.doorPivot) continue;
+
       const dm = visual.door.material as THREE.MeshStandardMaterial;
       dm.color.setHex(wall.doorOpen ? 0xa67c52 : 0x8b5a2b);
-
-      // Swing open ~95° (outward-ish)
       const openAngle = visual.horizontal ? -Math.PI * 0.55 : Math.PI * 0.55;
       visual.doorPivot.rotation.y = wall.doorOpen ? openAngle : 0;
     }

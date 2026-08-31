@@ -7,6 +7,13 @@ export type WallId = "north" | "south" | "east" | "west";
 
 export const WALL_IDS: readonly WallId[] = ["north", "south", "east", "west"] as const;
 
+/** Barricades that have a player door. West is solid (facility wall). */
+export const WALLS_WITH_DOORS: readonly WallId[] = ["north", "south", "east"] as const;
+
+export function wallHasDoor(id: WallId): boolean {
+  return (WALLS_WITH_DOORS as readonly string[]).includes(id);
+}
+
 export type WallTierDef = {
   tier: number;
   maxHp: number;
@@ -66,25 +73,29 @@ export const BASE = {
   coreMaxHp: 200,
   interactRange: 2.8,
   /** Reach to toggle a barricade door. */
-  doorInteractRange: 2.4,
-  /** Clear opening width in each barricade (world units). */
-  doorWidth: 2.4,
+  doorInteractRange: 2.6,
+  /** Clear opening width in each door barricade (world units). */
+  doorWidth: 2.6,
   /** Wood per craft at workbench when shotgun unlocked. */
   shotgunCraftScrap: 8,
   shotgunCraftWood: 2,
 } as const;
 
-/** Safehouse layout — walls around the pad, props nearby. */
+/**
+ * Expanded safehouse (~16×16).
+ * West wall is solid (no door) — storage / workbench / generator lined along it.
+ */
 export const BASE_LAYOUT = {
-  core: { x: 0, y: 0, z: 0, radius: 1.2 },
-  storage: { x: 3.2, y: 0, z: 0.5 },
-  workbench: { x: -3.0, y: 0, z: 0.8 },
-  generator: { x: 0.2, y: 0, z: -3.4 },
+  core: { x: 0, y: 0, z: 0, radius: 0.85 },
+  /** Along inner west wall (no door). */
+  storage: { x: -6.4, y: 0, z: -4.2 },
+  workbench: { x: -6.4, y: 0, z: 0 },
+  generator: { x: -6.4, y: 0, z: 4.2 },
   walls: {
-    north: { x: 0, z: 4.6, sx: 9, sy: 2.2, sz: 0.55 },
-    south: { x: 0, z: -4.6, sx: 9, sy: 2.2, sz: 0.55 },
-    east: { x: 4.6, z: 0, sx: 0.55, sy: 2.2, sz: 9 },
-    west: { x: -4.6, z: 0, sx: 0.55, sy: 2.2, sz: 9 },
+    north: { x: 0, z: 8, sx: 16.6, sy: 2.4, sz: 0.55 },
+    south: { x: 0, z: -8, sx: 16.6, sy: 2.4, sz: 0.55 },
+    east: { x: 8, z: 0, sx: 0.55, sy: 2.4, sz: 16.6 },
+    west: { x: -8, z: 0, sx: 0.55, sy: 2.4, sz: 16.6 },
   },
 } as const;
 
@@ -119,30 +130,34 @@ export function wallAabb(id: WallId): Aabb {
   };
 }
 
-/** Center of the door opening on a barricade. */
+/** Center of the door opening on a barricade (only meaningful if wallHasDoor). */
 export function wallDoorCenter(id: WallId): { x: number; z: number } {
   const w = BASE_LAYOUT.walls[id];
   return { x: w.x, z: w.z };
 }
 
 /**
- * Collision pieces for one barricade: two side panels + door slab when closed.
- * Broken walls contribute nothing. Open doors omit the door slab (players & zombies pass).
- * Only players can toggle doors — zombies never open them.
+ * Collision pieces for one barricade.
+ * Door walls: two side panels + door slab when closed.
+ * Solid walls (no door): one full slab.
  */
 export function wallSolidAabbs(id: WallId, doorOpen: boolean, broken: boolean): Aabb[] {
   if (broken) return [];
   const w = BASE_LAYOUT.walls[id];
-  const door = BASE.doorWidth;
   const h = w.sy;
-  const out: Aabb[] = [];
 
-  const horizontal = w.sx >= w.sz; // north/south run along X
+  if (!wallHasDoor(id)) {
+    return [wallAabb(id)];
+  }
+
+  const door = BASE.doorWidth;
+  const out: Aabb[] = [];
+  const horizontal = w.sx >= w.sz;
+
   if (horizontal) {
     const side = (w.sx - door) / 2;
     const z0 = w.z - w.sz / 2;
     const z1 = w.z + w.sz / 2;
-    // West panel
     out.push({
       minX: w.x - w.sx / 2,
       maxX: w.x - w.sx / 2 + side,
@@ -151,7 +166,6 @@ export function wallSolidAabbs(id: WallId, doorOpen: boolean, broken: boolean): 
       minZ: z0,
       maxZ: z1,
     });
-    // East panel
     out.push({
       minX: w.x + w.sx / 2 - side,
       maxX: w.x + w.sx / 2,
@@ -174,7 +188,6 @@ export function wallSolidAabbs(id: WallId, doorOpen: boolean, broken: boolean): 
     const side = (w.sz - door) / 2;
     const x0 = w.x - w.sx / 2;
     const x1 = w.x + w.sx / 2;
-    // South panel
     out.push({
       minX: x0,
       maxX: x1,
@@ -183,7 +196,6 @@ export function wallSolidAabbs(id: WallId, doorOpen: boolean, broken: boolean): 
       minZ: w.z - w.sz / 2,
       maxZ: w.z - w.sz / 2 + side,
     });
-    // North panel
     out.push({
       minX: x0,
       maxX: x1,
@@ -229,12 +241,15 @@ function propBox(x: number, z: number, sx: number, sy: number, sz: number): Aabb
   };
 }
 
-/** Storage crate, workbench, generator — match client mesh sizes. */
+/** Core pillar + storage + workbench + generator. */
 export function baseFacilityAabbs(): Aabb[] {
+  const core = BASE_LAYOUT.core;
   const s = BASE_LAYOUT.storage;
   const wb = BASE_LAYOUT.workbench;
   const gen = BASE_LAYOUT.generator;
+  const coreW = core.radius * 1.7;
   return [
+    propBox(core.x, core.z, coreW, 2.5, coreW),
     propBox(s.x, s.z, 1.15, 1.05, 0.9),
     propBox(wb.x, wb.z, 1.45, 1.0, 0.95),
     propBox(gen.x, gen.z, 1.15, 1.2, 1.0),

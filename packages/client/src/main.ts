@@ -14,6 +14,7 @@ import {
   lootSpotAabbs,
   storageTierDef,
   wallDoorCenter,
+  wallHasDoor,
   wallTierDef,
   workbenchTierDef,
   type BaseSnapshot,
@@ -188,6 +189,7 @@ function phaseLabel(phase: InvasionSnapshot["phase"]): string {
 }
 
 function formatTimer(sec: number): string {
+  if (sec < 0) return "waiting";
   const s = Math.max(0, Math.ceil(sec));
   const m = Math.floor(s / 60);
   const r = s % 60;
@@ -522,12 +524,15 @@ function startGame(
     invasionPhaseEl.textContent = phaseLabel(inv.phase);
     const waveBit =
       inv.phase === "waves" ? ` · Wave ${inv.waveIndex + 1}/${inv.wavesTotal}` : "";
-    invasionMetaEl.textContent = `Invasion ${inv.invasionIndex + 1}${waveBit} · ${formatTimer(inv.phaseEndsIn)}`;
+    invasionMetaEl.textContent =
+      inv.phase === "prep"
+        ? `Invasion ${inv.invasionIndex + 1} · wait for ready`
+        : `Invasion ${inv.invasionIndex + 1}${waveBit} · ${formatTimer(inv.phaseEndsIn)}`;
     const readyHint =
       inv.phase === "prep"
         ? self?.ready
           ? "You are READY · R to cancel"
-          : "R — Ready"
+          : "R — Ready (starts when all ready)"
         : "";
     invasionReadyEl.textContent = `Ready ${inv.readyCount} / ${inv.playerCount}${readyHint ? ` · ${readyHint}` : ""}`;
     invasionReadyEl.style.color =
@@ -666,8 +671,21 @@ function startGame(
   }
 
   const onGameKeyDown = (e: KeyboardEvent) => {
-    if (!alive || consoleUi.isOpen() || invUi.isOpen) return;
+    if (!alive || consoleUi.isOpen()) return;
     if (e.repeat) return;
+
+    if (e.code === "KeyI") {
+      e.preventDefault();
+      const selfInv = latestPlayers.find((p) => p.id === active.playerId);
+      if (invUi.isOpen) {
+        invUi.close();
+        return;
+      }
+      if (selfInv && !selfInv.downed) invUi.openPlayer();
+      return;
+    }
+
+    if (invUi.isOpen) return;
     const self = latestPlayers.find((p) => p.id === active.playerId);
     if (!self || self.downed) return;
 
@@ -760,6 +778,7 @@ function startGame(
     let best: (typeof latestBase.walls)[number] | null = null;
     let dist = Number(BASE.doorInteractRange);
     for (const wall of latestBase.walls) {
+      if (!wallHasDoor(wall.id)) continue;
       if (wall.broken || wall.hp <= 0) continue;
       const door = wallDoorCenter(wall.id);
       const d = distXZ(fp.state.x, fp.state.z, door.x, door.z);
@@ -797,11 +816,8 @@ function startGame(
 
   function handleInteractEdge(self: PlayerSnapshot): void {
     if (!fp.consumeInteractEdge() || self.downed) return;
-
-    if (invUi.isOpen) {
-      invUi.close();
-      return;
-    }
+    // Inventory is I-only; E is world interactions.
+    if (invUi.isOpen) return;
 
     if (nearestDowned(active.playerId)) return;
 
@@ -821,10 +837,7 @@ function startGame(
       net.sendOpenLoot(loot.id);
       const node = latestLoot.find((n) => n.id === loot.id) ?? loot;
       invUi.openLoot(node.id, node.label, node.slots);
-      return;
     }
-
-    invUi.openPlayer();
   }
 
   function handlePingEdge(self: PlayerSnapshot): void {

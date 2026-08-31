@@ -1,5 +1,7 @@
 /** Slot-based items, hotbar, inventory, storage, loot containers. */
 
+import { BASE_LAYOUT } from "./baseUpgrades.js";
+
 export type ItemId =
   | "food"
   | "scrap"
@@ -111,7 +113,12 @@ export const LOOT = {
   withdrawChunk: 0,
 } as const;
 
-export const STORAGE_POS = { x: 3.2, y: 0, z: 0.5 } as const;
+/** Shared storage crate position (west facility row). */
+export const STORAGE_POS = {
+  x: BASE_LAYOUT.storage.x,
+  y: BASE_LAYOUT.storage.y,
+  z: BASE_LAYOUT.storage.z,
+} as const;
 
 export type SlotBag = "hotbar" | "inv" | "storage" | "loot";
 

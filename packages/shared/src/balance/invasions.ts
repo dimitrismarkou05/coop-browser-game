@@ -10,11 +10,10 @@ export type WaveSpawn = {
 };
 
 export const INVASION = {
-  /** Soft prep max before auto-warning (seconds). ~2 min for snappy V1 loops. */
-  prepMaxSec: 120,
-  /** Floor after escalation shrink. */
-  prepMinSec: 60,
-  prepShrinkPerInvasion: 15,
+  /** Prep has no auto-timer — invasion starts only when all players ready. */
+  prepMaxSec: 0,
+  prepMinSec: 0,
+  prepShrinkPerInvasion: 0,
   /** Base warning before waves (generator adds bonus). */
   warningBaseSec: 40,
   /** Cleanup grace after last wave before auto-win if stragglers remain. */
@@ -23,7 +22,7 @@ export const INVASION = {
   resolveSec: 12,
   wavesPerInvasion: 3,
   /** Edge spawn distance from origin. */
-  spawnRadius: 32,
+  spawnRadius: 36,
   /** Soft-fail wall damage fraction on wipe. */
   wipeWallDamageFrac: 0.45,
   wipeCoreRestoreFrac: 0.55,
@@ -32,9 +31,9 @@ export const INVASION = {
   rewardScrapPerIndex: 2,
 } as const;
 
-export function prepDurationSec(invasionIndex: number): number {
-  const shrink = invasionIndex * INVASION.prepShrinkPerInvasion;
-  return Math.max(INVASION.prepMinSec, INVASION.prepMaxSec - shrink);
+/** Unused for countdown — prep is indefinite until all ready. */
+export function prepDurationSec(_invasionIndex: number): number {
+  return 0;
 }
 
 export function warningDurationSec(generatorTier: number, warningBonusSec: number): number {
