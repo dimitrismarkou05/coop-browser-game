@@ -413,70 +413,37 @@
       #vitals {
         position: fixed;
         left: 50%;
-        bottom: 88px;
+        bottom: 84px;
         transform: translateX(-50%);
         z-index: 14;
         display: none;
-        flex-direction: column;
-        gap: 6px;
-        width: min(340px, calc(100vw - 24px));
-        padding: 8px 10px;
-        background: rgba(13, 17, 23, 0.82);
-        border: 1px solid #30363d;
-        border-radius: 10px;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        gap: 24px;
+        width: calc(6 * var(--slot) + 5 * 4px + 12px);
+        padding: 0;
+        background: transparent;
+        border: none;
         pointer-events: none;
       }
       #vitals.visible {
         display: flex;
       }
-      #vitals .vital-row {
+      #hearts,
+      #food-icons {
         display: flex;
-        align-items: center;
-        gap: 8px;
+        flex-direction: row;
+        gap: 2px;
       }
-      #vitals .vital-label {
-        width: 42px;
-        font-size: 11px;
-        color: #8b949e;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+      #food-icons {
+        flex-direction: row-reverse;
       }
-      #vitals .vital-bar {
-        flex: 1;
-        height: 10px;
-        border-radius: 999px;
-        background: #21262d;
-        overflow: hidden;
-        border: 1px solid #30363d;
-      }
-      #vitals .vital-fill {
-        height: 100%;
-        width: 100%;
-        transition: width 0.1s linear;
-      }
-      #vitals #hp-fill {
-        background: #3d9a5f;
-      }
-      #vitals #hp-fill.hurt {
-        background: #d29922;
-      }
-      #vitals #hp-fill.critical {
-        background: #f85149;
-      }
-      #hunger-fill {
-        background: #c4a35a;
-      }
-      #hunger-fill.low {
-        background: #db6d28;
-      }
-      #hunger-fill.critical {
-        background: #f85149;
-      }
-      #vitals .vital-text {
-        width: 64px;
-        font-size: 12px;
-        text-align: right;
-        color: #e6edf3;
+      .mc-pip {
+        width: 18px;
+        height: 18px;
+        image-rendering: pixelated;
+        flex-shrink: 0;
       }
       .inv-slot {
         width: var(--slot);
@@ -653,16 +620,8 @@
       <div id="hint">Click the game to capture mouse</div>
     </div>
     <div id="vitals">
-      <div class="vital-row">
-        <div class="vital-label">HP</div>
-        <div class="vital-bar"><div id="hp-fill" class="vital-fill"></div></div>
-        <div id="hp-text" class="vital-text">—</div>
-      </div>
-      <div class="vital-row">
-        <div class="vital-label">Food</div>
-        <div class="vital-bar"><div id="hunger-fill" class="vital-fill"></div></div>
-        <div id="hunger-text" class="vital-text">—</div>
-      </div>
+      <div id="hearts" aria-label="Health"></div>
+      <div id="food-icons" aria-label="Hunger"></div>
     </div>
     <div id="hotbar"></div>
     <div id="inv-ui">

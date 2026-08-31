@@ -97,12 +97,12 @@ export const COMBAT = {
 export const SURVIVAL = {
   maxHunger: 100,
   startingHunger: 100,
-  /** Passive hunger drain / sec (walk & idle share this — walking does not add extra). */
-  hungerDrainPerSec: 0.4,
+  /** Baseline hunger drain / sec (idle & walk). ~28 min to empty from full. */
+  hungerDrainPerSec: 0.06,
   /** Extra hunger drain / sec while sprinting. */
-  hungerSprintDrainPerSec: 3.2,
+  hungerSprintDrainPerSec: 0.85,
   /** HP restored / sec when hunger is high enough. */
-  hpRegenPerSec: 5,
+  hpRegenPerSec: 4,
   /** Need at least this much hunger (absolute) to regen HP. */
   hpRegenMinHunger: 50,
   /** Hunger restored per food item eaten. */

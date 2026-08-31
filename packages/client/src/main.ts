@@ -25,6 +25,7 @@ import { Viewmodel } from "./render/viewmodel";
 import { ZombieRenderer } from "./render/zombies";
 import { DevConsole } from "./ui/DevConsole";
 import { InventoryUi } from "./ui/InventoryUi";
+import { renderPipRow, valueToPips } from "./ui/mcVitals";
 import { getPreviousNames, getRememberedName, rememberName } from "./ui/nameMemory";
 
 const lobbyEl = document.getElementById("lobby")!;
@@ -37,6 +38,8 @@ const btnJoin = document.getElementById("btn-join") as HTMLButtonElement;
 
 const hudEl = document.getElementById("hud")!;
 const vitalsEl = document.getElementById("vitals")!;
+const heartsEl = document.getElementById("hearts")!;
+const foodIconsEl = document.getElementById("food-icons")!;
 const hotbarEl = document.getElementById("hotbar")!;
 const crosshairEl = document.getElementById("crosshair")!;
 const hurtFlashEl = document.getElementById("hurt-flash")!;
@@ -54,10 +57,6 @@ const roomCodeEl = document.getElementById("room-code")!;
 const youNameEl = document.getElementById("you-name")!;
 const playerCountEl = document.getElementById("player-count")!;
 const zombieCountEl = document.getElementById("zombie-count")!;
-const hpFillEl = document.getElementById("hp-fill")!;
-const hpTextEl = document.getElementById("hp-text")!;
-const hungerFillEl = document.getElementById("hunger-fill")!;
-const hungerTextEl = document.getElementById("hunger-text")!;
 const ammoEl = document.getElementById("ammo")!;
 const hintEl = document.getElementById("hint")!;
 
@@ -110,11 +109,7 @@ function setNetStatus(text: string, kind: "connecting" | "connected" | "disconne
 }
 
 function updateHpHud(hp: number, maxHp: number): void {
-  const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
-  hpFillEl.style.width = `${pct}%`;
-  hpTextEl.textContent = `${Math.round(hp)} / ${maxHp}`;
-  hpFillEl.classList.toggle("critical", pct <= 30);
-  hpFillEl.classList.toggle("hurt", pct > 30 && pct <= 60);
+  renderPipRow(heartsEl, valueToPips(hp, maxHp), "heart");
   if (hp < lastKnownHp) {
     hurtFlashEl.classList.add("on");
     window.setTimeout(() => hurtFlashEl.classList.remove("on"), 180);
@@ -123,11 +118,7 @@ function updateHpHud(hp: number, maxHp: number): void {
 }
 
 function updateHungerHud(hunger: number, maxHunger: number): void {
-  const pct = Math.max(0, Math.min(100, (hunger / maxHunger) * 100));
-  hungerFillEl.style.width = `${pct}%`;
-  hungerTextEl.textContent = `${Math.round(hunger)} / ${maxHunger}`;
-  hungerFillEl.classList.toggle("critical", pct < 25);
-  hungerFillEl.classList.toggle("low", pct >= 25 && pct < 50);
+  renderPipRow(foodIconsEl, valueToPips(hunger, maxHunger), "food");
 }
 
 function flashHitMarker(): void {
