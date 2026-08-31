@@ -8,6 +8,7 @@ import {
   INVASION,
   ITEMS,
   LOOT_SPOTS,
+  lootSpotAabbs,
   M4_AMBIENT,
   MAX_PLAYERS_PER_ROOM,
   PLAYER,
@@ -22,6 +23,7 @@ import {
   ZOMBIE_DEFS,
   applyPlayerMovement,
   applyVerticalMovement,
+  baseFacilityAabbs,
   clampPitch,
   clampToZombiePen,
   cloneSlots,
@@ -299,7 +301,12 @@ export class Room {
     for (const w of this.walls.values()) {
       wallBoxes.push(...wallSolidAabbs(w.id, w.doorOpen, w.hp <= 0));
     }
-    this.solids = [...getSolidAabbs(), ...wallBoxes];
+    this.solids = [
+      ...getSolidAabbs(),
+      ...wallBoxes,
+      ...baseFacilityAabbs(),
+      ...lootSpotAabbs(),
+    ];
   }
 
   snapshotBase(): BaseSnapshot {

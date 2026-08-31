@@ -329,6 +329,25 @@ export const LOOT_SPOTS: readonly LootSpotDef[] = [
   },
 ];
 
+/** Solid boxes for loot crates (match client cylinder footprint). */
+export function lootSpotAabbs(): {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+}[] {
+  return LOOT_SPOTS.map((s) => ({
+    minX: s.x - 0.48,
+    maxX: s.x + 0.48,
+    minY: 0,
+    maxY: 0.75,
+    minZ: s.z - 0.48,
+    maxZ: s.z + 0.48,
+  }));
+}
+
 /** One slot per successful table roll. */
 export function rollLootStacks(table: readonly LootTableEntry[]): ItemStack[] {
   const stacks: ItemStack[] = [];

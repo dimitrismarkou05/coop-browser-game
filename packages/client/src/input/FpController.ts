@@ -193,20 +193,22 @@ export class FpController {
   reconcile(server: { x: number; y: number; z: number }): void {
     const dx = server.x - this.state.x;
     const dz = server.z - this.state.z;
-    const distSq = dx * dx + dz * dz;
-    if (distSq > 2.5 * 2.5) {
+    const dist = Math.hypot(dx, dz);
+    // Ignore micro error (tick/dt skew) — prevents constant tiny rubberband.
+    if (dist > 2.8) {
       this.state.x = server.x;
       this.state.z = server.z;
-    } else if (distSq > 0.0001) {
-      this.state.x += dx * 0.35;
-      this.state.z += dz * 0.35;
+    } else if (dist > 0.18) {
+      const t = Math.min(0.28, (dist - 0.18) * 0.35);
+      this.state.x += dx * t;
+      this.state.z += dz * t;
     }
     const dy = server.y - this.state.y;
     if (Math.abs(dy) > 1.5) {
       this.state.y = server.y;
       this.state.vy = 0;
-    } else {
-      this.state.y += dy * 0.4;
+    } else if (Math.abs(dy) > 0.12) {
+      this.state.y += dy * 0.25;
     }
   }
 

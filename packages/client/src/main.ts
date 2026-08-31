@@ -3,14 +3,19 @@ import {
   BASE_LAYOUT,
   COMBAT,
   INV,
-  ITEMS,
-  MILESTONE,
   PLAYER,
   STORAGE_POS,
+  baseFacilityAabbs,
   baseWallSolids,
+  countItem,
   distXZ,
+  generatorTierDef,
   getSolidAabbs,
+  lootSpotAabbs,
+  storageTierDef,
   wallDoorCenter,
+  wallTierDef,
+  workbenchTierDef,
   type BaseSnapshot,
   type GameEvent,
   type InvasionSnapshot,
@@ -63,13 +68,8 @@ const reviveTimeEl = document.getElementById("revive-time")!;
 const downedBannerEl = document.getElementById("downed-banner")!;
 const statusEl = document.getElementById("status")!;
 const rttEl = document.getElementById("rtt")!;
-const milestoneEl = document.getElementById("milestone")!;
 const roomCodeEl = document.getElementById("room-code")!;
-const youNameEl = document.getElementById("you-name")!;
 const playerCountEl = document.getElementById("player-count")!;
-const zombieCountEl = document.getElementById("zombie-count")!;
-const ammoEl = document.getElementById("ammo")!;
-const hintEl = document.getElementById("hint")!;
 
 const invasionHudEl = document.getElementById("invasion-hud")!;
 const invasionPhaseEl = document.getElementById("invasion-phase")!;
@@ -86,8 +86,6 @@ const summaryCardEl = document.getElementById("summary-card")!;
 const summaryTitleEl = document.getElementById("summary-title")!;
 const summaryBodyEl = document.getElementById("summary-body")!;
 const sirenFlashEl = document.getElementById("siren-flash")!;
-
-milestoneEl.textContent = MILESTONE;
 
 function refreshNameHistory(): void {
   const list = document.getElementById("name-history");
@@ -263,7 +261,6 @@ const socket = new ClientSocket({
   onStatus: setNetStatus,
   onMessage: (msg) => {
     if (msg.type === "welcome") {
-      milestoneEl.textContent = msg.milestone;
       return;
     }
     if (msg.type === "pong") {
@@ -348,15 +345,12 @@ function enterWorld(
   baseHudEl.classList.add("visible");
   compassEl.classList.add("visible");
   roomCodeEl.textContent = session.code;
-  youNameEl.textContent = session.name;
   playerCountEl.textContent = String(players.length);
-  zombieCountEl.textContent = String(zombies.length);
 
   const me = players.find((p) => p.id === session!.playerId);
   lastKnownHp = me?.hp ?? PLAYER.maxHp;
   updateHpHud(me?.hp ?? PLAYER.maxHp, me?.maxHp ?? PLAYER.maxHp);
   updateHungerHud(me?.hunger ?? 100, me?.maxHunger ?? 100);
-  ammoEl.textContent = String(me?.ammo ?? 0);
 
   if (game) game.dispose();
   game = startGame(session, players, zombies, lootNodes, storage, base, invasion, pings, {
@@ -418,7 +412,12 @@ function startGame(
     sendToggleDoor: (wallId: WallId) => void;
   },
 ) {
-  let solids = [...getSolidAabbs(), ...baseWallSolids(initialBase.walls)];
+  let solids = [
+    ...getSolidAabbs(),
+    ...baseWallSolids(initialBase.walls),
+    ...baseFacilityAabbs(),
+    ...lootSpotAabbs(),
+  ];
   const me = initialPlayers.find((p) => p.id === active.playerId);
 
   const scene = new THREE.Scene();
@@ -695,20 +694,46 @@ function startGame(
 
     if (e.code === "KeyT") {
       e.preventDefault();
+      const have = bagCounts(self);
+
       if (nearWorkbench() && latestBase.workbenchTier < 3) {
+        const next = workbenchTierDef(latestBase.workbenchTier + 1);
+        const msg = needMsg("workbench", next.upgradeScrap, 0, have);
+        if (msg) {
+          flashLootToast(msg);
+          return;
+        }
         net.sendUpgradeBase("workbench");
         return;
       }
       if (nearGenerator() && latestBase.generatorTier < 3) {
+        const next = generatorTierDef(latestBase.generatorTier + 1);
+        const msg = needMsg("generator", next.upgradeScrap, 0, have);
+        if (msg) {
+          flashLootToast(msg);
+          return;
+        }
         net.sendUpgradeBase("generator");
         return;
       }
       if (nearStorage() && latestBase.storageTier < 3) {
+        const next = storageTierDef(latestBase.storageTier + 1);
+        const msg = needMsg("storage", next.upgradeScrap, next.upgradeWood, have);
+        if (msg) {
+          flashLootToast(msg);
+          return;
+        }
         net.sendUpgradeBase("storage");
         return;
       }
       const wall = nearestWall();
       if (wall && wall.tier < 3) {
+        const next = wallTierDef(wall.tier + 1);
+        const msg = needMsg(`${wall.id} wall`, next.upgradeScrap, next.upgradeWood, have);
+        if (msg) {
+          flashLootToast(msg);
+          return;
+        }
         net.sendUpgradeBase("wall", wall.id);
       }
       return;
@@ -717,6 +742,14 @@ function startGame(
     if (e.code === "KeyC") {
       e.preventDefault();
       if (nearWorkbench() && latestBase.unlocks.includes("shotgun")) {
+        const have = bagCounts(self);
+        if (have.scrap < BASE.shotgunCraftScrap || have.wood < BASE.shotgunCraftWood) {
+          const missing: string[] = [];
+          if (BASE.shotgunCraftScrap > have.scrap) missing.push(`${BASE.shotgunCraftScrap} scrap`);
+          if (BASE.shotgunCraftWood > have.wood) missing.push(`${BASE.shotgunCraftWood} wood`);
+          flashLootToast(`Need ${missing.join(" + ")} to craft shotgun`);
+          return;
+        }
         net.sendCraft("shotgun");
       }
     }
@@ -739,7 +772,27 @@ function startGame(
   }
 
   function rebuildSolidsFromBase(base: BaseSnapshot): void {
-    solids = [...getSolidAabbs(), ...baseWallSolids(base.walls)];
+    solids = [
+      ...getSolidAabbs(),
+      ...baseWallSolids(base.walls),
+      ...baseFacilityAabbs(),
+      ...lootSpotAabbs(),
+    ];
+  }
+
+  function bagCounts(self: PlayerSnapshot): { scrap: number; wood: number } {
+    return {
+      scrap: countItem(self.hotbar, "scrap") + countItem(self.inventory, "scrap"),
+      wood: countItem(self.hotbar, "wood") + countItem(self.inventory, "wood"),
+    };
+  }
+
+  function needMsg(label: string, needScrap: number, needWood: number, have: { scrap: number; wood: number }): string | null {
+    const missing: string[] = [];
+    if (needScrap > have.scrap) missing.push(`${needScrap} scrap`);
+    if (needWood > have.wood) missing.push(`${needWood} wood`);
+    if (!missing.length) return null;
+    return `Need ${missing.join(" + ")} to upgrade ${label}`;
   }
 
   function handleInteractEdge(self: PlayerSnapshot): void {
@@ -785,86 +838,16 @@ function startGame(
   function updatePrompts(self: PlayerSnapshot): void {
     fp.setDowned(self.downed);
     updateReviveHud(self);
+    promptEl.classList.remove("visible");
 
     if (self.downed) {
       downedBannerEl.classList.add("visible");
       downedBannerEl.textContent = self.beingRevived
         ? `DOWNED — revive in progress · bleedout paused (${Math.max(0, self.bleedout).toFixed(0)}s left)`
         : `DOWNED — bleedout ${Math.max(0, self.bleedout).toFixed(0)}s · wait for revive`;
-      promptEl.classList.remove("visible");
       return;
     }
     downedBannerEl.classList.remove("visible");
-
-    if (invUi.isOpen) {
-      promptEl.classList.remove("visible");
-      return;
-    }
-
-    const down = nearestDowned(active.playerId);
-    if (down) {
-      promptEl.classList.add("visible");
-      promptEl.textContent =
-        self.reviveProgress > 0
-          ? `Reviving ${down.name}…`
-          : `Hold E to revive ${down.name} (${COMBAT.reviveDuration}s)`;
-      return;
-    }
-
-    const doorWall = nearestDoorWall();
-    if (doorWall) {
-      promptEl.classList.add("visible");
-      promptEl.textContent = doorWall.doorOpen
-        ? "E — close door"
-        : "E — open door";
-      return;
-    }
-
-    if (nearWorkbench()) {
-      const parts: string[] = [];
-      if (latestBase.unlocks.includes("shotgun")) parts.push("C — craft shotgun");
-      if (latestBase.workbenchTier < 3) parts.push("T — upgrade workbench");
-      if (parts.length) {
-        promptEl.classList.add("visible");
-        promptEl.textContent = parts.join(" · ");
-        return;
-      }
-    }
-
-    if (nearGenerator() && latestBase.generatorTier < 3) {
-      promptEl.classList.add("visible");
-      promptEl.textContent = "T — upgrade generator";
-      return;
-    }
-
-    if (nearStorage()) {
-      const parts = ["E — open storage"];
-      if (latestBase.storageTier < 3) parts.push("T — upgrade storage");
-      promptEl.classList.add("visible");
-      promptEl.textContent = parts.join(" · ");
-      return;
-    }
-
-    const wall = nearestWall();
-    if (wall) {
-      const parts: string[] = [];
-      if (wall.hp < wall.maxHp || wall.broken) parts.push("F — repair wall");
-      if (wall.tier < 3) parts.push("T — upgrade wall");
-      if (parts.length) {
-        promptEl.classList.add("visible");
-        promptEl.textContent = parts.join(" · ");
-        return;
-      }
-    }
-
-    const loot = nearestLoot();
-    if (loot) {
-      promptEl.classList.add("visible");
-      promptEl.textContent = loot.opened ? `E — open ${loot.label}` : `E — search ${loot.label}`;
-      return;
-    }
-
-    promptEl.classList.remove("visible");
   }
 
   updateInvasionHud(initialInvasion, me);
@@ -879,7 +862,6 @@ function startGame(
     latestInvasion = msg.invasion;
     rebuildSolidsFromBase(msg.base);
     playerCountEl.textContent = String(msg.players.length);
-    zombieCountEl.textContent = String(msg.zombies.length);
     const self = msg.players.find((p) => p.id === active.playerId);
     if (self) {
       fp.reconcile(self);
@@ -888,9 +870,6 @@ function startGame(
       updateHungerHud(self.hunger, self.maxHunger);
       const held = self.hotbar[self.selectedSlot];
       viewmodel.setItem(held?.id ?? null);
-      const gunHint =
-        held && ITEMS[held.id].kind === "gun" ? ITEMS[held.id].label : "no gun";
-      ammoEl.textContent = `${self.ammo} · ${gunHint}`;
 
       const lootSlots =
         invUi.getMode() === "loot" && invUi.getLootId()
@@ -967,16 +946,6 @@ function startGame(
     camera.rotation.y = fp.state.yaw;
     camera.rotation.x = fp.state.pitch;
     updateCompass();
-
-    hintEl.textContent = consoleUi.isOpen()
-      ? "Dev console open — ` to close"
-      : invUi.isOpen
-        ? "Inventory open — drag or Shift-click · E to close"
-        : !fp.isLocked
-          ? "Click the game to capture mouse"
-          : fp.isSprinting()
-            ? "Sprinting · release Shift to walk"
-            : "1–6 · Shift sprint · E door/inv · R ready · Q ping · F repair · T upgrade · C craft · LMB use · ` console";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);

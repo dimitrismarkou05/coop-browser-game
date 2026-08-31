@@ -217,3 +217,26 @@ export function baseWallSolids(
   }
   return boxes;
 }
+
+function propBox(x: number, z: number, sx: number, sy: number, sz: number): Aabb {
+  return {
+    minX: x - sx / 2,
+    maxX: x + sx / 2,
+    minY: 0,
+    maxY: sy,
+    minZ: z - sz / 2,
+    maxZ: z + sz / 2,
+  };
+}
+
+/** Storage crate, workbench, generator — match client mesh sizes. */
+export function baseFacilityAabbs(): Aabb[] {
+  const s = BASE_LAYOUT.storage;
+  const wb = BASE_LAYOUT.workbench;
+  const gen = BASE_LAYOUT.generator;
+  return [
+    propBox(s.x, s.z, 1.15, 1.05, 0.9),
+    propBox(wb.x, wb.z, 1.45, 1.0, 0.95),
+    propBox(gen.x, gen.z, 1.15, 1.2, 1.0),
+  ];
+}
