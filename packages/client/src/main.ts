@@ -475,6 +475,7 @@ function startGame(
     onMove: (from, to) => net.sendInvMove(from, to),
     onQuickMove: (from, prefer, containerLootId) =>
       net.sendInvQuickMove(from, prefer, containerLootId),
+    onSelectSlot: (n) => fp.setSelectedSlot(n),
     onClose: () => {
       if (document.pointerLockElement !== renderer.domElement) {
         void renderer.domElement.requestPointerLock();
@@ -676,14 +677,19 @@ function startGame(
     if (!alive || consoleUi.isOpen()) return;
     if (e.repeat) return;
 
+    if (e.code === "Escape") {
+      if (invUi.isOpen) {
+        e.preventDefault();
+        invUi.close();
+      }
+      return;
+    }
+
     if (e.code === "KeyI") {
       e.preventDefault();
       const selfInv = latestPlayers.find((p) => p.id === active.playerId);
-      if (invUi.isOpen) {
-        invUi.close();
-        return;
-      }
-      if (selfInv && !selfInv.downed) invUi.openPlayer();
+      if (invUi.isOpen || !selfInv || selfInv.downed) return;
+      invUi.openPlayer();
       return;
     }
 
@@ -818,8 +824,21 @@ function startGame(
 
   function handleInteractEdge(self: PlayerSnapshot): void {
     if (!fp.consumeInteractEdge() || self.downed) return;
-    // Inventory is I-only; E is world interactions.
-    if (invUi.isOpen) return;
+
+    if (invUi.isOpen) {
+      if (invUi.getMode() === "storage" && nearStorage()) {
+        invUi.close();
+        return;
+      }
+      if (invUi.getMode() === "loot") {
+        const loot = nearestLoot();
+        if (loot && loot.id === invUi.getLootId()) {
+          invUi.close();
+          return;
+        }
+      }
+      return;
+    }
 
     if (nearestDowned(active.playerId)) return;
 
@@ -880,10 +899,10 @@ function startGame(
     const self = msg.players.find((p) => p.id === active.playerId);
     if (self) {
       fp.reconcile(self, fp.isMoving());
-      fp.setSelectedSlot(self.selectedSlot);
+      fp.acceptServerSlot(self.selectedSlot);
       updateHpHud(self.hp, self.maxHp);
       updateHungerHud(self.hunger, self.maxHunger);
-      const held = self.hotbar[self.selectedSlot];
+      const held = self.hotbar[fp.getSelectedSlot()];
       viewmodel.setItem(held?.id ?? null);
 
       const lootSlots =
@@ -895,7 +914,7 @@ function startGame(
         inventory: self.inventory,
         storage: latestStorage,
         lootSlots,
-        selectedSlot: self.selectedSlot,
+        selectedSlot: fp.getSelectedSlot(),
       });
       handleInteractEdge(self);
       handlePingEdge(self);

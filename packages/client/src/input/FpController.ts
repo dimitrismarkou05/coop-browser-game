@@ -39,7 +39,7 @@ export class FpController {
   private downed = false;
   private blocked = false;
   private selectedSlot = 0;
-  private slotEdge: number | null = null;
+  private slotPickAt = 0;
   /** Send an input packet ASAP (e.g. on key release so server stops). */
   private forceInput = false;
 
@@ -94,8 +94,15 @@ export class FpController {
     }
   }
 
-  setSelectedSlot(n: number): void {
-    this.selectedSlot = n;
+  setSelectedSlot(n: number, fromServer = false): void {
+    this.selectedSlot = Math.max(0, Math.min(5, n));
+    if (!fromServer) this.slotPickAt = performance.now();
+  }
+
+  /** Avoid server snapshots fighting rapid local 1–6 picks. */
+  acceptServerSlot(serverSlot: number): void {
+    if (performance.now() - this.slotPickAt < 300) return;
+    this.setSelectedSlot(serverSlot, true);
   }
 
   getSelectedSlot(): number {
@@ -170,10 +177,6 @@ export class FpController {
     const jump = this.jumpEdge;
     this.useEdge = false;
     this.jumpEdge = false;
-    if (this.slotEdge !== null) {
-      this.selectedSlot = this.slotEdge;
-      this.slotEdge = null;
-    }
     this.seq += 1;
     return {
       seq: this.seq,
@@ -193,37 +196,26 @@ export class FpController {
   predict(dt: number, solids: readonly Aabb[]): void {
     if (this.downed || this.blocked) return;
     const axes = this.getAxes();
-    // No residual motion when keys are up.
-    if (axes.forward === 0 && axes.strafe === 0) {
-      const vert = applyVerticalMovement(
-        this.state.y,
-        this.state.vy,
-        false,
+    const wantJump = this.jumpEdge;
+    this.jumpEdge = false;
+
+    if (axes.forward !== 0 || axes.strafe !== 0) {
+      const speed = PLAYER.moveSpeed * (this.isSprinting() ? PLAYER.sprintMul : 1);
+      const moved = applyPlayerMovement(
+        this.state.x,
+        this.state.z,
+        this.state.yaw,
+        axes.forward,
+        axes.strafe,
         dt,
-        this.state.grounded,
+        solids,
+        PLAYER.radius,
+        speed,
       );
-      this.state.y = vert.y;
-      this.state.vy = vert.vy;
-      this.state.grounded = vert.grounded;
-      return;
+      this.state.x = moved.x;
+      this.state.z = moved.z;
     }
 
-    const speed = PLAYER.moveSpeed * (this.isSprinting() ? PLAYER.sprintMul : 1);
-    const moved = applyPlayerMovement(
-      this.state.x,
-      this.state.z,
-      this.state.yaw,
-      axes.forward,
-      axes.strafe,
-      dt,
-      solids,
-      PLAYER.radius,
-      speed,
-    );
-    this.state.x = moved.x;
-    this.state.z = moved.z;
-
-    const wantJump = this.jumpEdge;
     const vert = applyVerticalMovement(
       this.state.y,
       this.state.vy,
@@ -292,7 +284,8 @@ export class FpController {
     }
     const digit = e.code.match(/^Digit([1-6])$/);
     if (digit && !e.repeat) {
-      this.slotEdge = Number(digit[1]) - 1;
+      this.selectedSlot = Number(digit[1]) - 1;
+      this.slotPickAt = performance.now();
     }
     this.keys.add(e.code);
   };

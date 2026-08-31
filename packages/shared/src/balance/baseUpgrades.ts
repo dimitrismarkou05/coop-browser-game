@@ -250,8 +250,8 @@ export function baseFacilityAabbs(): Aabb[] {
   const coreW = core.radius * 1.7;
   return [
     propBox(core.x, core.z, coreW, 2.5, coreW),
-    propBox(s.x, s.z, 1.15, 1.05, 0.9),
-    propBox(wb.x, wb.z, 1.45, 1.0, 0.95),
-    propBox(gen.x, gen.z, 1.15, 1.2, 1.0),
+    propBox(s.x, s.z, 0.88, 0.95, 0.72),
+    propBox(wb.x, wb.z, 1.05, 0.9, 0.72),
+    propBox(gen.x, gen.z, 0.92, 1.0, 0.78),
   ];
 }

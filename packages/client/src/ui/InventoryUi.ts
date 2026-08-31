@@ -22,6 +22,7 @@ export type InventoryUiOptions = {
     prefer: "player" | "container",
     containerLootId?: string,
   ) => void;
+  onSelectSlot?: (index: number) => void;
   onClose: () => void;
   onOpenChange: (open: boolean) => void;
 };
@@ -90,7 +91,10 @@ export class InventoryUi {
   }
 
   setSelectedSlot(n: number): void {
-    this.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, n));
+    const slot = Math.max(0, Math.min(INV.hotbarSize - 1, n));
+    if (slot === this.selectedSlot) return;
+    this.selectedSlot = slot;
+    this.opts.onSelectSlot?.(slot);
     this.renderHotbars();
   }
 
@@ -105,7 +109,9 @@ export class InventoryUi {
     this.inventory = data.inventory;
     this.storage = data.storage;
     if (data.lootSlots) this.lootSlots = data.lootSlots;
-    this.selectedSlot = data.selectedSlot;
+    if (data.selectedSlot !== this.selectedSlot) {
+      this.selectedSlot = data.selectedSlot;
+    }
     this.renderHotbars();
     if (this.isOpen) this.renderMenus();
   }
