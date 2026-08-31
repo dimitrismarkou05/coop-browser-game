@@ -4,6 +4,7 @@ import {
   BASE,
   BASE_LAYOUT,
   COMBAT,
+  DEV,
   INV,
   INVASION,
   ITEMS,
@@ -952,6 +953,14 @@ export class Room {
     }
   }
 
+  /** Refill all world loot crates for the next prep round. */
+  private resetLootNodes(): void {
+    for (const node of this.lootNodes.values()) {
+      node.opened = false;
+      node.slots = [];
+    }
+  }
+
   private spawnZombieAt(kind: ZombieTypeId, x: number, z: number): void {
     const def = ZOMBIE_DEFS[kind];
     const id = `z${nextZombieSeq++}`;
@@ -1119,11 +1128,13 @@ export class Room {
 
     const ammoLeft =
       countItem(player.hotbar, "ammo") + countItem(player.inventory, "ammo");
-    if (ammoLeft < gun.ammoCost) return;
+    if (!DEV.infiniteAmmo && ammoLeft < gun.ammoCost) return;
 
-    let need = gun.ammoCost;
-    need = consumeItem(player.hotbar, "ammo", need);
-    if (need > 0) consumeItem(player.inventory, "ammo", need);
+    if (!DEV.infiniteAmmo) {
+      let need = gun.ammoCost;
+      need = consumeItem(player.hotbar, "ammo", need);
+      if (need > 0) consumeItem(player.inventory, "ammo", need);
+    }
 
     player.weaponCd = gun.cooldown;
 
@@ -1420,6 +1431,8 @@ export class Room {
       player.ready = false;
     }
 
+    this.resetLootNodes();
+
     this.phase = "prep";
     this.phaseTimer = prepDurationSec(this.invasionIndex);
     this.cleanupTimer = null;
@@ -1454,6 +1467,8 @@ export class Room {
       this.respawnPlayer(player);
       player.ready = false;
     }
+
+    this.resetLootNodes();
 
     this.phase = "prep";
     this.phaseTimer = prepDurationSec(this.invasionIndex);

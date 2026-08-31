@@ -32,5 +32,10 @@ export const MAP = {
   halfExtent: 40,
 } as const;
 
+/** Dev toggles — flip before production deploy. */
+export const DEV = {
+  infiniteAmmo: true,
+} as const;
+
 export const PLAYER_COLORS = [0x3d9a5f, 0xd97706, 0x3b82f6, 0xc084fc] as const;
 
