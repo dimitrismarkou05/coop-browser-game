@@ -17,6 +17,7 @@ import {
   SPAWN_POSITION,
   STORAGE_POS,
   SURVIVAL,
+  STALE_INPUT_MS,
   TICK_MS,
   WALL_IDS,
   WEAPONS,
@@ -1687,7 +1688,7 @@ export class Room {
       this.updateSurvival(player, dt);
 
       // Drop stale movement if the client stopped sending (or stop packet is late).
-      if (Date.now() - player.lastInputAt > 120) {
+      if (Date.now() - player.lastInputAt > STALE_INPUT_MS) {
         player.forward = 0;
         player.strafe = 0;
         player.sprinting = false;

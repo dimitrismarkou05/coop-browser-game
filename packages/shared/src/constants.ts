@@ -4,8 +4,10 @@ export const DEFAULT_SERVER_PORT = 2567;
 /** Milestone tag — bump as milestones complete. */
 export const MILESTONE = "M10" as const;
 
-export const TICK_HZ = 15;
+export const TICK_HZ = 20;
 export const TICK_MS = 1000 / TICK_HZ;
+/** Stop applying move axes if no input packet arrives within this window. */
+export const STALE_INPUT_MS = 450;
 export const MAX_PLAYERS_PER_ROOM = 4;
 
 /** Player locomotion / capsule (shared so client prediction matches server). */

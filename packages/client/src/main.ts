@@ -5,6 +5,7 @@ import {
   INV,
   PLAYER,
   STORAGE_POS,
+  TICK_HZ,
   baseFacilityAabbs,
   baseWallSolids,
   countItem,
@@ -521,6 +522,7 @@ function startGame(
 
   let last = performance.now();
   let inputAcc = 0;
+  const inputIdleInterval = 1 / TICK_HZ;
   let alive = true;
 
   function updateInvasionHud(inv: InvasionSnapshot, self?: PlayerSnapshot): void {
@@ -949,8 +951,10 @@ function startGame(
 
     inputAcc += dt;
     const forceInput = fp.consumeForceInput();
-    if (forceInput || inputAcc >= 1 / 30) {
-      inputAcc = forceInput ? 0 : inputAcc - 1 / 30;
+    const sendInputNow =
+      forceInput || moving || inputAcc >= inputIdleInterval;
+    if (sendInputNow) {
+      inputAcc = moving || forceInput ? 0 : inputAcc - inputIdleInterval;
       if (inputAcc < 0) inputAcc = 0;
       if (!consoleUi.isOpen()) {
         const packet = fp.nextInputPacket();
