@@ -30,8 +30,8 @@ export function applyPlayerMovement(
   strafe: number,
   dt: number,
   solids: readonly Aabb[],
-  radius = PLAYER.radius,
-  speed = PLAYER.moveSpeed,
+  radius: number = PLAYER.radius,
+  speed: number = PLAYER.moveSpeed,
 ): { x: number; z: number } {
   const axes = normalizeAxes(forward, strafe);
   if (axes.forward === 0 && axes.strafe === 0) {

@@ -82,6 +82,14 @@ export class FpController {
     return this.selectedSlot;
   }
 
+  isSprinting(): boolean {
+    return (
+      !this.blocked &&
+      !this.downed &&
+      (this.keys.has("ShiftLeft") || this.keys.has("ShiftRight"))
+    );
+  }
+
   /** Consume one-frame E press for inventory open/close. */
   consumeInteractEdge(): boolean {
     const v = this.interactEdge;
@@ -115,6 +123,7 @@ export class FpController {
     interact: boolean;
     jump: boolean;
     selectedSlot: number;
+    sprint: boolean;
   } {
     const axes = this.getAxes();
     const shoot = this.shootEdge;
@@ -139,12 +148,14 @@ export class FpController {
       interact: this.isInteractHeld(),
       jump,
       selectedSlot: this.selectedSlot,
+      sprint: this.isSprinting(),
     };
   }
 
   predict(dt: number, solids: readonly Aabb[]): void {
     if (this.downed || this.blocked) return;
     const axes = this.getAxes();
+    const speed = PLAYER.moveSpeed * (this.isSprinting() ? PLAYER.sprintMul : 1);
     const moved = applyPlayerMovement(
       this.state.x,
       this.state.z,
@@ -153,6 +164,8 @@ export class FpController {
       axes.strafe,
       dt,
       solids,
+      PLAYER.radius,
+      speed,
     );
     this.state.x = moved.x;
     this.state.z = moved.z;
@@ -205,6 +218,8 @@ export class FpController {
         "KeyE",
         "KeyF",
         "Space",
+        "ShiftLeft",
+        "ShiftRight",
         "Digit1",
         "Digit2",
         "Digit3",

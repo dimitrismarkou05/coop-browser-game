@@ -81,9 +81,18 @@ export type ClientMessage =
       interact?: boolean;
       jump?: boolean;
       selectedSlot?: number;
+      sprint?: boolean;
     }
   | { type: "openLoot"; lootId: string }
   | { type: "invMove"; from: SlotRef; to: SlotRef }
+  | {
+      type: "invQuickMove";
+      from: SlotRef;
+      /** Where to pour the stack (Minecraft shift-click target). */
+      prefer: "player" | "container";
+      /** When prefer is container and target is a loot node. */
+      containerLootId?: string;
+    }
   | { type: "devCommand"; line: string };
 
 export type ServerMessage =
@@ -166,6 +175,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
           melee: Boolean(raw.melee),
           interact: Boolean(raw.interact),
           jump: Boolean(raw.jump),
+          sprint: Boolean(raw.sprint),
           selectedSlot:
             typeof raw.selectedSlot === "number" ? Math.floor(raw.selectedSlot) : undefined,
         };
@@ -181,6 +191,17 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       const to = parseSlotRef(raw.to);
       if (from && to) return { type: "invMove", from, to };
       return null;
+    }
+    case "invQuickMove": {
+      const from = parseSlotRef(raw.from);
+      if (!from) return null;
+      if (raw.prefer !== "player" && raw.prefer !== "container") return null;
+      return {
+        type: "invQuickMove",
+        from,
+        prefer: raw.prefer,
+        containerLootId: typeof raw.containerLootId === "string" ? raw.containerLootId : undefined,
+      };
     }
     case "devCommand":
       if (typeof raw.line === "string") {

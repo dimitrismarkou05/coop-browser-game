@@ -1,10 +1,12 @@
 import { ZOMBIE_DEFS, type ZombieSnapshot } from "@coop/shared";
 import * as THREE from "three";
+import { createZombieModel, disposeObject3D } from "./characterModels";
 
 type ZombieVisual = {
   root: THREE.Group;
-  body: THREE.Mesh;
+  body: THREE.Group;
   target: { x: number; y: number; z: number; yaw: number };
+  walkPhase: number;
 };
 
 export class ZombieRenderer {
@@ -32,12 +34,7 @@ export class ZombieRenderer {
     for (const [id, visual] of this.visuals) {
       if (!seen.has(id)) {
         this.scene.remove(visual.root);
-        visual.root.traverse((o) => {
-          if (o instanceof THREE.Mesh) {
-            o.geometry.dispose();
-            (o.material as THREE.Material).dispose();
-          }
-        });
+        disposeObject3D(visual.root);
         this.visuals.delete(id);
       }
     }
@@ -46,38 +43,37 @@ export class ZombieRenderer {
   update(dt: number): void {
     const t = 1 - Math.exp(-10 * dt);
     for (const visual of this.visuals.values()) {
-      visual.root.position.x += (visual.target.x - visual.root.position.x) * t;
+      const dx = visual.target.x - visual.root.position.x;
+      const dz = visual.target.z - visual.root.position.z;
+      const moving = Math.hypot(dx, dz) > 0.015;
+      visual.root.position.x += dx * t;
       visual.root.position.y += (visual.target.y - visual.root.position.y) * t;
-      visual.root.position.z += (visual.target.z - visual.root.position.z) * t;
+      visual.root.position.z += dz * t;
       visual.root.rotation.y = visual.target.yaw;
+
+      if (moving) {
+        visual.walkPhase += dt * 7;
+        visual.body.position.y = Math.abs(Math.sin(visual.walkPhase)) * 0.05;
+        visual.body.rotation.z = Math.sin(visual.walkPhase) * 0.06;
+        visual.body.rotation.x = 0.12 + Math.sin(visual.walkPhase * 0.5) * 0.04;
+      }
     }
   }
 
   private create(zombie: ZombieSnapshot): ZombieVisual {
     const def = ZOMBIE_DEFS[zombie.kind];
-    const root = new THREE.Group();
-    root.position.set(zombie.x, zombie.y, zombie.z);
-    root.rotation.y = zombie.yaw;
-
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(def.radius, Math.max(0.1, def.height - def.radius * 2), 3, 6),
-      new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.9 }),
-    );
-    body.position.y = def.height / 2;
-    root.add(body);
-
-    // Simple head bump so they read as zombies, not players.
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(def.radius * 0.85, 8, 8),
-      new THREE.MeshStandardMaterial({ color: 0x6d8f5c, roughness: 0.95 }),
-    );
-    head.position.y = def.height + def.radius * 0.15;
-    root.add(head);
+    const model = createZombieModel(def.color);
+    // Scale slightly by type radius so bruisers read bigger.
+    const scale = Math.max(0.85, def.radius / 0.35);
+    model.root.scale.setScalar(scale);
+    model.root.position.set(zombie.x, zombie.y, zombie.z);
+    model.root.rotation.y = zombie.yaw;
 
     return {
-      root,
-      body,
+      root: model.root,
+      body: model.body,
       target: { x: zombie.x, y: zombie.y, z: zombie.z, yaw: zombie.yaw },
+      walkPhase: Math.random() * Math.PI * 2,
     };
   }
 }

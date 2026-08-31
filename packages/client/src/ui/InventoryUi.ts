@@ -17,6 +17,11 @@ type DragState = {
 
 export type InventoryUiOptions = {
   onMove: (from: SlotRef, to: SlotRef) => void;
+  onQuickMove: (
+    from: SlotRef,
+    prefer: "player" | "container",
+    containerLootId?: string,
+  ) => void;
   onClose: () => void;
   onOpenChange: (open: boolean) => void;
 };
@@ -253,6 +258,14 @@ export class InventoryUi {
 
       if (!this.isOpen) return;
 
+      // Minecraft shift-click quick transfer
+      if (e.shiftKey && slot) {
+        this.drag = null;
+        this.ghost.classList.remove("on");
+        this.handleShiftClick(bag, index);
+        return;
+      }
+
       if (this.drag) {
         this.dropOn(bag, index);
         return;
@@ -276,6 +289,25 @@ export class InventoryUi {
     });
 
     return cell;
+  }
+
+  private handleShiftClick(bag: SlotBag, index: number): void {
+    const from = this.ref(bag, index);
+    if (bag === "storage" || bag === "loot") {
+      this.opts.onQuickMove(from, "player");
+      return;
+    }
+    // From player slots
+    if (this.mode === "storage") {
+      this.opts.onQuickMove(from, "container");
+      return;
+    }
+    if (this.mode === "loot" && this.lootId) {
+      this.opts.onQuickMove(from, "container", this.lootId);
+      return;
+    }
+    // Inventory-only: hotbar ↔ inv
+    this.opts.onQuickMove(from, "player");
   }
 
   private ref(bag: SlotBag, index: number): SlotRef {

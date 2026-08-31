@@ -31,6 +31,7 @@ import {
   lookDirection,
   moveSlots,
   moveToward,
+  quickMoveInto,
   randomPointInZombiePen,
   raycastCapsuleXZ,
   rollLootStacks,
@@ -73,6 +74,7 @@ export type RoomPlayer = {
   meleeQueued: boolean;
   jumpQueued: boolean;
   interactHeld: boolean;
+  sprinting: boolean;
   reviveTargetId: string | null;
   reviveProgress: number;
   ws: WebSocket;
@@ -183,6 +185,7 @@ export class Room {
       meleeQueued: false,
       jumpQueued: false,
       interactHeld: false,
+      sprinting: false,
       reviveTargetId: null,
       reviveProgress: 0,
       ws,
@@ -212,6 +215,7 @@ export class Room {
       interact?: boolean;
       jump?: boolean;
       selectedSlot?: number;
+      sprint?: boolean;
     },
   ): void {
     const player = this.players.get(playerId);
@@ -224,6 +228,7 @@ export class Room {
     if (input.melee) player.meleeQueued = true;
     if (input.jump) player.jumpQueued = true;
     player.interactHeld = Boolean(input.interact);
+    player.sprinting = Boolean(input.sprint) && !player.downed;
     if (typeof input.selectedSlot === "number") {
       player.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, input.selectedSlot));
     }
@@ -261,6 +266,49 @@ export class Room {
     }
 
     moveSlots(fromBag, from.index, toBag, to.index);
+  }
+
+  invQuickMove(
+    playerId: string,
+    from: SlotRef,
+    prefer: "player" | "container",
+    containerLootId?: string,
+  ): void {
+    const player = this.players.get(playerId);
+    if (!player || player.downed) return;
+
+    const fromBag = this.resolveBag(player, from);
+    if (!fromBag) return;
+
+    if (from.bag === "storage") {
+      if (distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) > INV.storageRange) return;
+    }
+    if (from.bag === "loot") {
+      const node = from.lootId ? this.lootNodes.get(from.lootId) : null;
+      if (!node || distXZ(player.x, player.z, node.x, node.z) > INV.interactRange) return;
+    }
+
+    let destinations: Slot[][];
+
+    if (prefer === "player") {
+      if (from.bag === "hotbar") {
+        destinations = [player.inventory];
+      } else if (from.bag === "inv") {
+        destinations = [player.hotbar];
+      } else {
+        // From chest/loot → inventory rows first, then hotbar
+        destinations = [player.inventory, player.hotbar];
+      }
+    } else if (containerLootId) {
+      const node = this.lootNodes.get(containerLootId);
+      if (!node || distXZ(player.x, player.z, node.x, node.z) > INV.interactRange) return;
+      destinations = [node.slots];
+    } else {
+      if (distXZ(player.x, player.z, STORAGE_POS.x, STORAGE_POS.z) > INV.storageRange) return;
+      destinations = [this.storage];
+    }
+
+    quickMoveInto(fromBag, from.index, destinations);
   }
 
   handleDevCommand(playerId: string, line: string): { ok: boolean; message: string } {
@@ -746,7 +794,7 @@ export class Room {
         dt,
         this.solids,
         PLAYER.radius,
-        PLAYER.moveSpeed,
+        PLAYER.moveSpeed * (player.sprinting ? PLAYER.sprintMul : 1),
       );
       player.x = moved.x;
       player.z = moved.z;
@@ -899,6 +947,7 @@ export class RoomManager {
       interact?: boolean;
       jump?: boolean;
       selectedSlot?: number;
+      sprint?: boolean;
     },
   ): void {
     const binding = this.bySocket.get(ws);
@@ -916,6 +965,17 @@ export class RoomManager {
     const binding = this.bySocket.get(ws);
     if (!binding) return;
     binding.room.invMove(binding.playerId, from, to);
+  }
+
+  handleInvQuickMove(
+    ws: WebSocket,
+    from: SlotRef,
+    prefer: "player" | "container",
+    containerLootId?: string,
+  ): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.invQuickMove(binding.playerId, from, prefer, containerLootId);
   }
 
   handleDevCommand(ws: WebSocket, line: string): void {

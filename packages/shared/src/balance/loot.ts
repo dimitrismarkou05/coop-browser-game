@@ -186,6 +186,47 @@ export function moveSlots(
   return true;
 }
 
+/**
+ * Minecraft-style shift-click: pour stack into destination bag(s)
+ * left→right, top→bottom (index order). Merge existing stacks first, then empties.
+ * Mutates arrays. Returns true if anything moved.
+ */
+export function quickMoveInto(
+  fromSlots: Slot[],
+  fromIndex: number,
+  destinations: Slot[][],
+): boolean {
+  if (fromIndex < 0 || fromIndex >= fromSlots.length) return false;
+  const stack = fromSlots[fromIndex];
+  if (!stack) return false;
+
+  const startCount = stack.count;
+
+  for (const toSlots of destinations) {
+    if (stack.count <= 0) break;
+    // Pass 1: merge
+    for (let i = 0; i < toSlots.length && stack.count > 0; i++) {
+      const t = toSlots[i];
+      if (!t || t.id !== stack.id) continue;
+      const space = ITEMS[t.id].maxStack - t.count;
+      if (space <= 0) continue;
+      const move = Math.min(space, stack.count);
+      t.count += move;
+      stack.count -= move;
+    }
+    // Pass 2: empty slots L→R
+    for (let i = 0; i < toSlots.length && stack.count > 0; i++) {
+      if (toSlots[i]) continue;
+      const take = Math.min(ITEMS[stack.id].maxStack, stack.count);
+      toSlots[i] = { id: stack.id, count: take };
+      stack.count -= take;
+    }
+  }
+
+  if (stack.count <= 0) fromSlots[fromIndex] = null;
+  return stack.count < startCount;
+}
+
 export type LootTableEntry = {
   id: ItemId;
   min: number;

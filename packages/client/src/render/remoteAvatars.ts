@@ -1,5 +1,6 @@
 import { ITEMS, PLAYER, type ItemId, type PlayerSnapshot } from "@coop/shared";
 import * as THREE from "three";
+import { createHumanoid, disposeObject3D } from "./characterModels";
 
 function makeNameSprite(name: string, color: number, downed: boolean): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -35,24 +36,27 @@ function buildHeldWeapon(id: ItemId | null): THREE.Group | null {
 
   if (kind === "gun") {
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.35), mat);
-    body.position.set(0.28, 0.95, -0.35);
-    body.rotation.y = -0.15;
+    body.position.set(0.38, 1.05, -0.28);
+    body.rotation.y = -0.2;
     g.add(body);
   } else if (id === "axe") {
     const haft = new THREE.Mesh(
       new THREE.CylinderGeometry(0.02, 0.025, 0.55, 5),
       new THREE.MeshStandardMaterial({ color: 0x5c3a1e }),
     );
-    haft.position.set(0.32, 1.0, -0.2);
-    haft.rotation.z = 0.5;
+    haft.position.set(0.4, 1.05, -0.15);
+    haft.rotation.z = 0.55;
     g.add(haft);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.06, 0.12), mat);
-    head.position.set(0.45, 1.2, -0.25);
+    head.position.set(0.55, 1.28, -0.2);
     g.add(head);
   } else {
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.02, id === "sword" ? 0.55 : 0.28), mat);
-    blade.position.set(0.3, 1.0, -0.25);
-    blade.rotation.y = -0.2;
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04, 0.02, id === "sword" ? 0.55 : 0.28),
+      mat,
+    );
+    blade.position.set(0.4, 1.05, -0.2);
+    blade.rotation.y = -0.25;
     g.add(blade);
   }
   return g;
@@ -60,8 +64,8 @@ function buildHeldWeapon(id: ItemId | null): THREE.Group | null {
 
 type RemoteVisual = {
   root: THREE.Group;
-  body: THREE.Mesh;
-  head: THREE.Mesh;
+  body: THREE.Group;
+  shirtMats: THREE.MeshStandardMaterial[];
   weapon: THREE.Group | null;
   weaponId: ItemId | null;
   label: THREE.Sprite;
@@ -69,6 +73,7 @@ type RemoteVisual = {
   name: string;
   color: number;
   target: { x: number; y: number; z: number; yaw: number };
+  walkPhase: number;
 };
 
 export class RemotePlayers {
@@ -106,12 +111,7 @@ export class RemotePlayers {
       if (heldId !== remote.weaponId) {
         if (remote.weapon) {
           remote.root.remove(remote.weapon);
-          remote.weapon.traverse((o) => {
-            if (o instanceof THREE.Mesh) {
-              o.geometry.dispose();
-              (o.material as THREE.Material).dispose();
-            }
-          });
+          disposeObject3D(remote.weapon);
         }
         remote.weapon = buildHeldWeapon(heldId);
         remote.weaponId = heldId;
@@ -122,22 +122,18 @@ export class RemotePlayers {
       remote.target.y = player.y;
       remote.target.z = player.z;
       remote.target.yaw = player.yaw;
-      (remote.body.material as THREE.MeshStandardMaterial).color.setHex(player.color);
-      (remote.head.material as THREE.MeshStandardMaterial).color.setHex(player.color);
+      for (const m of remote.shirtMats) m.color.setHex(player.color);
+
       remote.body.rotation.x = player.downed ? Math.PI / 2 : 0;
-      remote.body.position.y = player.downed ? PLAYER.radius : PLAYER.height / 2 - 0.1;
-      remote.head.visible = !player.downed;
+      remote.body.position.y = player.downed ? 0.15 : 0;
       if (remote.weapon) remote.weapon.visible = !player.downed;
-      remote.label.position.y = player.downed ? 1.1 : PLAYER.height + 0.25;
+      remote.label.position.y = player.downed ? 1.0 : PLAYER.height + 0.25;
     }
 
     for (const [id, remote] of this.remotes) {
       if (!seen.has(id)) {
         this.scene.remove(remote.root);
-        remote.body.geometry.dispose();
-        (remote.body.material as THREE.Material).dispose();
-        remote.head.geometry.dispose();
-        (remote.head.material as THREE.Material).dispose();
+        disposeObject3D(remote.root);
         const map = remote.label.material.map;
         remote.label.material.dispose();
         map?.dispose();
@@ -149,46 +145,43 @@ export class RemotePlayers {
   update(dt: number): void {
     const t = 1 - Math.exp(-12 * dt);
     for (const remote of this.remotes.values()) {
-      remote.root.position.x += (remote.target.x - remote.root.position.x) * t;
+      const dx = remote.target.x - remote.root.position.x;
+      const dz = remote.target.z - remote.root.position.z;
+      const moving = Math.hypot(dx, dz) > 0.02 && !remote.downed;
+      remote.root.position.x += dx * t;
       remote.root.position.y += (remote.target.y - remote.root.position.y) * t;
-      remote.root.position.z += (remote.target.z - remote.root.position.z) * t;
+      remote.root.position.z += dz * t;
       remote.root.rotation.y = remote.target.yaw;
+
+      if (moving) {
+        remote.walkPhase += dt * 10;
+        remote.body.position.y = Math.abs(Math.sin(remote.walkPhase)) * 0.04;
+        remote.body.rotation.z = Math.sin(remote.walkPhase) * 0.04;
+      } else if (!remote.downed) {
+        remote.body.position.y += (0 - remote.body.position.y) * 0.2;
+        remote.body.rotation.z *= 0.85;
+      }
     }
   }
 
   private createRemote(player: PlayerSnapshot): RemoteVisual {
-    const root = new THREE.Group();
-    root.position.set(player.x, player.y, player.z);
-    root.rotation.y = player.yaw;
-
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(PLAYER.radius * 0.95, PLAYER.height - PLAYER.radius * 2.4, 4, 8),
-      new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.7 }),
-    );
-    body.position.y = player.downed ? PLAYER.radius : PLAYER.height / 2 - 0.1;
-    body.rotation.x = player.downed ? Math.PI / 2 : 0;
-    root.add(body);
-
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.18, 10, 8),
-      new THREE.MeshStandardMaterial({ color: player.color, roughness: 0.65 }),
-    );
-    head.position.y = PLAYER.height - 0.15;
-    root.add(head);
+    const human = createHumanoid(player.color);
+    human.root.position.set(player.x, player.y, player.z);
+    human.root.rotation.y = player.yaw;
 
     const held = player.hotbar[player.selectedSlot];
     const heldId = held && ITEMS[held.id].kind !== "resource" ? held.id : null;
     const weapon = buildHeldWeapon(heldId);
-    if (weapon) root.add(weapon);
+    if (weapon) human.root.add(weapon);
 
     const label = makeNameSprite(player.name, player.color, player.downed);
-    if (player.downed) label.position.y = 1.1;
-    root.add(label);
+    if (player.downed) label.position.y = 1.0;
+    human.root.add(label);
 
     return {
-      root,
-      body,
-      head,
+      root: human.root,
+      body: human.body,
+      shirtMats: human.shirtMats,
       weapon,
       weaponId: heldId,
       label,
@@ -196,6 +189,7 @@ export class RemotePlayers {
       name: player.name,
       color: player.color,
       target: { x: player.x, y: player.y, z: player.z, yaw: player.yaw },
+      walkPhase: 0,
     };
   }
 }

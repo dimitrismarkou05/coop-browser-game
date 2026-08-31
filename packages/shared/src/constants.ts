@@ -23,6 +23,8 @@ export const PLAYER = {
   respawnIFrames: 2,
   jumpSpeed: 7.2,
   gravity: 22,
+  /** Multiplier applied to moveSpeed while sprinting (Shift). */
+  sprintMul: 1.65,
 } as const;
 
 /** Placeholder map bounds (world units). */

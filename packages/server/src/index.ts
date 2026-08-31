@@ -106,6 +106,11 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "invQuickMove") {
+      rooms.handleInvQuickMove(ws, msg.from, msg.prefer, msg.containerLootId);
+      return;
+    }
+
     if (msg.type === "devCommand") {
       rooms.handleDevCommand(ws, msg.line);
       return;

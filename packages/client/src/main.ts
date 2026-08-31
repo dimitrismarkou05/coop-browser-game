@@ -237,6 +237,8 @@ function enterWorld(
     sendInput: (packet) => socket.send({ type: "input", ...packet }),
     sendDev: (line) => socket.send({ type: "devCommand", line }),
     sendInvMove: (from, to) => socket.send({ type: "invMove", from, to }),
+    sendInvQuickMove: (from, prefer, containerLootId) =>
+      socket.send({ type: "invQuickMove", from, prefer, containerLootId }),
     sendOpenLoot: (lootId) => socket.send({ type: "openLoot", lootId }),
   });
 }
@@ -259,9 +261,15 @@ function startGame(
       interact: boolean;
       jump: boolean;
       selectedSlot: number;
+      sprint: boolean;
     }) => void;
     sendDev: (line: string) => void;
     sendInvMove: (from: SlotRef, to: SlotRef) => void;
+    sendInvQuickMove: (
+      from: SlotRef,
+      prefer: "player" | "container",
+      containerLootId?: string,
+    ) => void;
     sendOpenLoot: (lootId: string) => void;
   },
 ) {
@@ -313,6 +321,8 @@ function startGame(
 
   const invUi = new InventoryUi({
     onMove: (from, to) => net.sendInvMove(from, to),
+    onQuickMove: (from, prefer, containerLootId) =>
+      net.sendInvQuickMove(from, prefer, containerLootId),
     onClose: () => {
       if (document.pointerLockElement !== renderer.domElement) {
         void renderer.domElement.requestPointerLock();
@@ -580,10 +590,12 @@ function startGame(
     hintEl.textContent = consoleUi.isOpen()
       ? "Dev console open — ` to close"
       : invUi.isOpen
-        ? "Inventory open — E to close · drag to move items"
-        : fp.isLocked
-          ? "1–6 hotbar · E inventory/loot/storage · LMB shoot (gun) · F melee · Space jump · ` console"
-          : "Click the game to capture mouse";
+        ? "Inventory open — drag or Shift-click · E to close"
+        : !fp.isLocked
+          ? "Click the game to capture mouse"
+          : fp.isSprinting()
+            ? "Sprinting · release Shift to walk"
+            : "1–6 hotbar · Shift sprint · E inventory · LMB shoot · F melee · Space jump · ` console";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
