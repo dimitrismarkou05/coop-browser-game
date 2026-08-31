@@ -473,18 +473,30 @@
         font-weight: 650;
       }
       #inv-container-grid,
-      #inv-player-grid {
+      #inv-player-grid,
+      #inv-hotbar-grid {
         display: grid;
         gap: 4px;
         justify-content: center;
         margin-bottom: 14px;
       }
-      #inv-player-label {
+      #inv-hotbar-grid {
+        margin-bottom: 4px;
+        padding-top: 8px;
+        border-top: 1px solid #30363d;
+      }
+      #inv-player-label,
+      #inv-hotbar-label,
+      #inv-container-label {
         margin: 0 0 8px;
         color: #8b949e;
         font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
+      }
+      #inv-ui.open ~ #hotbar,
+      body:has(#inv-ui.open) #hotbar {
+        display: none !important;
       }
       .inv-empty {
         color: #8b949e;
@@ -566,10 +578,13 @@
     <div id="inv-ui">
       <div id="inv-panel">
         <h2 id="inv-title">Inventory</h2>
+        <div id="inv-container-label" hidden>Container</div>
         <div id="inv-container-grid"></div>
-        <div id="inv-player-label">Your inventory</div>
+        <div id="inv-player-label">Inventory</div>
         <div id="inv-player-grid"></div>
-        <div id="inv-hint">Drag items between slots · E to close · 1–6 select hotbar</div>
+        <div id="inv-hotbar-label">Hotbar</div>
+        <div id="inv-hotbar-grid"></div>
+        <div id="inv-hint">Drag between any slots · E to close · 1–6 select hotbar</div>
       </div>
     </div>
     <div id="inv-ghost"></div>

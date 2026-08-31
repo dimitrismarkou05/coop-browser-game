@@ -29,9 +29,11 @@ function slotLabel(slot: Slot): string {
 export class InventoryUi {
   private readonly root: HTMLElement;
   private readonly titleEl: HTMLElement;
+  private readonly containerLabel: HTMLElement;
   private readonly containerGrid: HTMLElement;
   private readonly invGrid: HTMLElement;
-  private readonly hotbarGrid: HTMLElement;
+  private readonly panelHotbarGrid: HTMLElement;
+  private readonly hudHotbar: HTMLElement;
   private readonly ghost: HTMLElement;
   private mode: InvUiMode = "closed";
   private lootId: string | null = null;
@@ -45,9 +47,11 @@ export class InventoryUi {
   constructor(private readonly opts: InventoryUiOptions) {
     this.root = document.getElementById("inv-ui")!;
     this.titleEl = document.getElementById("inv-title")!;
+    this.containerLabel = document.getElementById("inv-container-label")!;
     this.containerGrid = document.getElementById("inv-container-grid")!;
     this.invGrid = document.getElementById("inv-player-grid")!;
-    this.hotbarGrid = document.getElementById("hotbar")!;
+    this.panelHotbarGrid = document.getElementById("inv-hotbar-grid")!;
+    this.hudHotbar = document.getElementById("hotbar")!;
     this.ghost = document.getElementById("inv-ghost")!;
 
     document.addEventListener("mousemove", this.onMouseMove);
@@ -79,7 +83,7 @@ export class InventoryUi {
 
   setSelectedSlot(n: number): void {
     this.selectedSlot = Math.max(0, Math.min(INV.hotbarSize - 1, n));
-    this.renderHotbar();
+    this.renderHotbars();
   }
 
   sync(data: {
@@ -94,7 +98,7 @@ export class InventoryUi {
     this.storage = data.storage;
     if (data.lootSlots) this.lootSlots = data.lootSlots;
     this.selectedSlot = data.selectedSlot;
-    this.renderHotbar();
+    this.renderHotbars();
     if (this.isOpen) this.renderMenus();
   }
 
@@ -102,8 +106,10 @@ export class InventoryUi {
     this.mode = "player";
     this.lootId = null;
     this.titleEl.textContent = "Inventory";
+    this.containerLabel.hidden = true;
     this.containerGrid.style.display = "none";
     this.root.classList.add("open");
+    this.hudHotbar.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -112,8 +118,11 @@ export class InventoryUi {
     this.mode = "storage";
     this.lootId = null;
     this.titleEl.textContent = "Base storage";
+    this.containerLabel.hidden = false;
+    this.containerLabel.textContent = "Storage";
     this.containerGrid.style.display = "grid";
     this.root.classList.add("open");
+    this.hudHotbar.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -123,8 +132,11 @@ export class InventoryUi {
     this.lootId = lootId;
     this.lootSlots = slots;
     this.titleEl.textContent = label;
+    this.containerLabel.hidden = false;
+    this.containerLabel.textContent = "Loot";
     this.containerGrid.style.display = "grid";
     this.root.classList.add("open");
+    this.hudHotbar.classList.remove("visible");
     this.opts.onOpenChange(true);
     this.renderMenus();
   }
@@ -136,20 +148,29 @@ export class InventoryUi {
     this.drag = null;
     this.ghost.classList.remove("on");
     this.root.classList.remove("open");
+    this.hudHotbar.classList.add("visible");
     this.opts.onOpenChange(false);
     this.opts.onClose();
+    this.renderHotbars();
   }
 
-  private renderHotbar(): void {
-    this.hotbarGrid.innerHTML = "";
+  /** HUD bar when closed; panel bar when open — same slot data. */
+  private renderHotbars(): void {
+    this.fillHotbar(this.hudHotbar, !this.isOpen);
+    this.fillHotbar(this.panelHotbarGrid, this.isOpen);
+  }
+
+  private fillHotbar(target: HTMLElement, interactive: boolean): void {
+    target.innerHTML = "";
+    target.style.gridTemplateColumns = `repeat(${INV.hotbarSize}, var(--slot))`;
     for (let i = 0; i < INV.hotbarSize; i++) {
-      const cell = this.makeCell("hotbar", i, this.hotbar[i] ?? null, true);
+      const cell = this.makeCell("hotbar", i, this.hotbar[i] ?? null, true, interactive);
       if (i === this.selectedSlot) cell.classList.add("selected");
       const num = document.createElement("span");
       num.className = "slot-num";
       num.textContent = String(i + 1);
       cell.appendChild(num);
-      this.hotbarGrid.appendChild(cell);
+      target.appendChild(cell);
     }
   }
 
@@ -157,7 +178,7 @@ export class InventoryUi {
     this.invGrid.style.gridTemplateColumns = `repeat(${INV.invCols}, var(--slot))`;
     this.invGrid.innerHTML = "";
     for (let i = 0; i < INV.invSize; i++) {
-      this.invGrid.appendChild(this.makeCell("inv", i, this.inventory[i] ?? null, false));
+      this.invGrid.appendChild(this.makeCell("inv", i, this.inventory[i] ?? null, false, true));
     }
 
     this.containerGrid.innerHTML = "";
@@ -165,7 +186,7 @@ export class InventoryUi {
       this.containerGrid.style.gridTemplateColumns = `repeat(${INV.storageCols}, var(--slot))`;
       for (let i = 0; i < INV.storageSize; i++) {
         this.containerGrid.appendChild(
-          this.makeCell("storage", i, this.storage[i] ?? null, false),
+          this.makeCell("storage", i, this.storage[i] ?? null, false, true),
         );
       }
     } else if (this.mode === "loot") {
@@ -174,7 +195,7 @@ export class InventoryUi {
       this.containerGrid.style.gridTemplateColumns = `repeat(${cols}, var(--slot))`;
       for (let i = 0; i < this.lootSlots.length; i++) {
         this.containerGrid.appendChild(
-          this.makeCell("loot", i, this.lootSlots[i] ?? null, false),
+          this.makeCell("loot", i, this.lootSlots[i] ?? null, false, true),
         );
       }
       if (this.lootSlots.length === 0) {
@@ -184,6 +205,8 @@ export class InventoryUi {
         this.containerGrid.appendChild(empty);
       }
     }
+
+    this.renderHotbars();
   }
 
   private makeCell(
@@ -191,6 +214,7 @@ export class InventoryUi {
     index: number,
     slot: Slot,
     allowSelectClick: boolean,
+    interactive: boolean,
   ): HTMLElement {
     const cell = document.createElement("div");
     cell.className = "inv-slot";
@@ -205,11 +229,14 @@ export class InventoryUi {
       cell.appendChild(label);
     }
 
+    if (!interactive) return cell;
+
     cell.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
 
+      // Closed HUD hotbar: click selects active item only.
       if (!this.isOpen && allowSelectClick && bag === "hotbar") {
         this.setSelectedSlot(index);
         return;
