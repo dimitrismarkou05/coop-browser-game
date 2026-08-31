@@ -14,6 +14,7 @@ export type CheckpointWall = {
   id: WallId;
   hp: number;
   tier: number;
+  doorOpen?: boolean;
 };
 
 export type WorldCheckpoint = {

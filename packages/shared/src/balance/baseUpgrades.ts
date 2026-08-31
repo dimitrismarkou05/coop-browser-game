@@ -1,5 +1,7 @@
 /** Base component upgrade tiers (barricades, storage, workbench, generator). */
 
+import type { Aabb } from "../math.js";
+
 export type BaseComponentId = "storage" | "workbench" | "generator";
 export type WallId = "north" | "south" | "east" | "west";
 
@@ -63,6 +65,10 @@ export const GENERATOR_TIERS: readonly GeneratorTierDef[] = [
 export const BASE = {
   coreMaxHp: 200,
   interactRange: 2.8,
+  /** Reach to toggle a barricade door. */
+  doorInteractRange: 2.4,
+  /** Clear opening width in each barricade (world units). */
+  doorWidth: 2.4,
   /** Wood per craft at workbench when shotgun unlocked. */
   shotgunCraftScrap: 8,
   shotgunCraftWood: 2,
@@ -98,14 +104,8 @@ export function generatorTierDef(tier: number): GeneratorTierDef {
   return GENERATOR_TIERS[Math.max(0, Math.min(GENERATOR_TIERS.length - 1, tier - 1))]!;
 }
 
-export function wallAabb(id: WallId): {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  minZ: number;
-  maxZ: number;
-} {
+/** Full wall AABB (legacy / distance checks). Prefer wallSolidAabbs for collision. */
+export function wallAabb(id: WallId): Aabb {
   const w = BASE_LAYOUT.walls[id];
   const hx = w.sx / 2;
   const hz = w.sz / 2;
@@ -117,4 +117,103 @@ export function wallAabb(id: WallId): {
     minZ: w.z - hz,
     maxZ: w.z + hz,
   };
+}
+
+/** Center of the door opening on a barricade. */
+export function wallDoorCenter(id: WallId): { x: number; z: number } {
+  const w = BASE_LAYOUT.walls[id];
+  return { x: w.x, z: w.z };
+}
+
+/**
+ * Collision pieces for one barricade: two side panels + door slab when closed.
+ * Broken walls contribute nothing. Open doors omit the door slab (players & zombies pass).
+ * Only players can toggle doors — zombies never open them.
+ */
+export function wallSolidAabbs(id: WallId, doorOpen: boolean, broken: boolean): Aabb[] {
+  if (broken) return [];
+  const w = BASE_LAYOUT.walls[id];
+  const door = BASE.doorWidth;
+  const h = w.sy;
+  const out: Aabb[] = [];
+
+  const horizontal = w.sx >= w.sz; // north/south run along X
+  if (horizontal) {
+    const side = (w.sx - door) / 2;
+    const z0 = w.z - w.sz / 2;
+    const z1 = w.z + w.sz / 2;
+    // West panel
+    out.push({
+      minX: w.x - w.sx / 2,
+      maxX: w.x - w.sx / 2 + side,
+      minY: 0,
+      maxY: h,
+      minZ: z0,
+      maxZ: z1,
+    });
+    // East panel
+    out.push({
+      minX: w.x + w.sx / 2 - side,
+      maxX: w.x + w.sx / 2,
+      minY: 0,
+      maxY: h,
+      minZ: z0,
+      maxZ: z1,
+    });
+    if (!doorOpen) {
+      out.push({
+        minX: w.x - door / 2,
+        maxX: w.x + door / 2,
+        minY: 0,
+        maxY: h,
+        minZ: z0,
+        maxZ: z1,
+      });
+    }
+  } else {
+    const side = (w.sz - door) / 2;
+    const x0 = w.x - w.sx / 2;
+    const x1 = w.x + w.sx / 2;
+    // South panel
+    out.push({
+      minX: x0,
+      maxX: x1,
+      minY: 0,
+      maxY: h,
+      minZ: w.z - w.sz / 2,
+      maxZ: w.z - w.sz / 2 + side,
+    });
+    // North panel
+    out.push({
+      minX: x0,
+      maxX: x1,
+      minY: 0,
+      maxY: h,
+      minZ: w.z + w.sz / 2 - side,
+      maxZ: w.z + w.sz / 2,
+    });
+    if (!doorOpen) {
+      out.push({
+        minX: x0,
+        maxX: x1,
+        minY: 0,
+        maxY: h,
+        minZ: w.z - door / 2,
+        maxZ: w.z + door / 2,
+      });
+    }
+  }
+  return out;
+}
+
+/** All barricade collision AABBs for prediction / server solids. */
+export function baseWallSolids(
+  walls: readonly { id: WallId; doorOpen: boolean; broken: boolean; hp?: number }[],
+): Aabb[] {
+  const boxes: Aabb[] = [];
+  for (const wall of walls) {
+    const broken = wall.broken || (wall.hp !== undefined && wall.hp <= 0);
+    boxes.push(...wallSolidAabbs(wall.id, wall.doorOpen, broken));
+  }
+  return boxes;
 }

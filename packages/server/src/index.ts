@@ -127,6 +127,11 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "toggleDoor") {
+      rooms.handleToggleDoor(ws, msg.wallId);
+      return;
+    }
+
     if (msg.type === "upgradeBase") {
       rooms.handleUpgradeBase(ws, msg.component, msg.wallId);
       return;

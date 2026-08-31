@@ -47,6 +47,8 @@ import {
   startingInventory,
   storageTierDef,
   wallAabb,
+  wallDoorCenter,
+  wallSolidAabbs,
   wallTierDef,
   warningDurationSec,
   waveSpawns,
@@ -130,6 +132,7 @@ type RoomWall = {
   id: WallId;
   hp: number;
   tier: number;
+  doorOpen: boolean;
 };
 
 type RoomPing = {
@@ -245,7 +248,7 @@ export class Room {
     this.walls.clear();
     for (const id of WALL_IDS) {
       const def = wallTierDef(1);
-      this.walls.set(id, { id, hp: def.maxHp, tier: 1 });
+      this.walls.set(id, { id, hp: def.maxHp, tier: 1, doorOpen: false });
     }
     this.storageTier = 1;
     this.workbenchTier = 1;
@@ -268,7 +271,12 @@ export class Room {
       const tier = saved?.tier ?? 1;
       const def = wallTierDef(tier);
       const hp = saved?.hp ?? def.maxHp;
-      this.walls.set(id, { id, hp, tier });
+      this.walls.set(id, {
+        id,
+        hp,
+        tier,
+        doorOpen: Boolean(saved?.doorOpen),
+      });
     }
     this.storageTier = cp.storageTier;
     this.workbenchTier = cp.workbenchTier;
@@ -287,9 +295,10 @@ export class Room {
   }
 
   rebuildSolids(): void {
-    const wallBoxes = [...this.walls.values()]
-      .filter((w) => w.hp > 0)
-      .map((w) => wallAabb(w.id));
+    const wallBoxes: Aabb[] = [];
+    for (const w of this.walls.values()) {
+      wallBoxes.push(...wallSolidAabbs(w.id, w.doorOpen, w.hp <= 0));
+    }
     this.solids = [...getSolidAabbs(), ...wallBoxes];
   }
 
@@ -306,6 +315,7 @@ export class Room {
           maxHp,
           tier: w.tier,
           broken: w.hp <= 0,
+          doorOpen: w.doorOpen,
         };
       }),
       storageTier: this.storageTier,
@@ -369,6 +379,24 @@ export class Room {
     wall.hp = def.maxHp;
     if (wall.hp > 0) this.rebuildSolids();
     this.tickEvents.push({ kind: "repair", playerId, wallId, hp: wall.hp });
+  }
+
+  toggleDoor(playerId: string, wallId: WallId): void {
+    const player = this.players.get(playerId);
+    const wall = this.walls.get(wallId);
+    if (!player || !wall || player.downed) return;
+    if (wall.hp <= 0) return;
+    const door = wallDoorCenter(wallId);
+    if (distXZ(player.x, player.z, door.x, door.z) > BASE.doorInteractRange) return;
+
+    wall.doorOpen = !wall.doorOpen;
+    this.rebuildSolids();
+    this.tickEvents.push({
+      kind: "doorToggle",
+      wallId,
+      open: wall.doorOpen,
+      by: playerId,
+    });
   }
 
   upgradeBase(
@@ -511,7 +539,7 @@ export class Room {
       coreHp: this.coreHp,
       walls: WALL_IDS.map((id) => {
         const w = this.walls.get(id)!;
-        return { id, hp: w.hp, tier: w.tier };
+        return { id, hp: w.hp, tier: w.tier, doorOpen: w.doorOpen };
       }),
       storageTier: this.storageTier,
       workbenchTier: this.workbenchTier,
@@ -1465,6 +1493,7 @@ export class Room {
     if (wall.hp <= 0) return;
     wall.hp = Math.max(0, wall.hp - amount);
     if (wall.hp <= 0) {
+      wall.doorOpen = false;
       this.rebuildSolids();
       this.tickEvents.push({ kind: "wallBreak", wallId: wall.id });
     }
@@ -1871,6 +1900,12 @@ export class RoomManager {
     const binding = this.bySocket.get(ws);
     if (!binding) return;
     binding.room.repairWall(binding.playerId, wallId);
+  }
+
+  handleToggleDoor(ws: WebSocket, wallId: WallId): void {
+    const binding = this.bySocket.get(ws);
+    if (!binding) return;
+    binding.room.toggleDoor(binding.playerId, wallId);
   }
 
   handleUpgradeBase(

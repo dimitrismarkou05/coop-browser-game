@@ -7,8 +7,10 @@ import {
   MILESTONE,
   PLAYER,
   STORAGE_POS,
+  baseWallSolids,
   distXZ,
   getSolidAabbs,
+  wallDoorCenter,
   type BaseSnapshot,
   type GameEvent,
   type InvasionSnapshot,
@@ -370,6 +372,7 @@ function enterWorld(
       socket.send({ type: "upgradeBase", component, wallId }),
     sendCraft: (recipe) => socket.send({ type: "craft", recipe }),
     sendWorldPing: (x, y, z) => socket.send({ type: "worldPing", x, y, z }),
+    sendToggleDoor: (wallId) => socket.send({ type: "toggleDoor", wallId }),
   });
 }
 
@@ -412,9 +415,10 @@ function startGame(
     ) => void;
     sendCraft: (recipe: "shotgun") => void;
     sendWorldPing: (x: number, y: number, z: number) => void;
+    sendToggleDoor: (wallId: WallId) => void;
   },
 ) {
-  const solids = getSolidAabbs();
+  let solids = [...getSolidAabbs(), ...baseWallSolids(initialBase.walls)];
   const me = initialPlayers.find((p) => p.id === active.playerId);
 
   const scene = new THREE.Scene();
@@ -452,7 +456,7 @@ function startGame(
   const fp = new FpController(renderer.domElement, {
     x: me?.x ?? 0,
     y: me?.y ?? 0,
-    z: me?.z ?? 4,
+    z: me?.z ?? 0,
     yaw: me?.yaw ?? 0,
     pitch: me?.pitch ?? 0,
   });
@@ -719,6 +723,25 @@ function startGame(
   };
   window.addEventListener("keydown", onGameKeyDown);
 
+  function nearestDoorWall(): (typeof latestBase.walls)[number] | null {
+    let best: (typeof latestBase.walls)[number] | null = null;
+    let dist = Number(BASE.doorInteractRange);
+    for (const wall of latestBase.walls) {
+      if (wall.broken || wall.hp <= 0) continue;
+      const door = wallDoorCenter(wall.id);
+      const d = distXZ(fp.state.x, fp.state.z, door.x, door.z);
+      if (d < dist) {
+        dist = d;
+        best = wall;
+      }
+    }
+    return best;
+  }
+
+  function rebuildSolidsFromBase(base: BaseSnapshot): void {
+    solids = [...getSolidAabbs(), ...baseWallSolids(base.walls)];
+  }
+
   function handleInteractEdge(self: PlayerSnapshot): void {
     if (!fp.consumeInteractEdge() || self.downed) return;
 
@@ -728,6 +751,12 @@ function startGame(
     }
 
     if (nearestDowned(active.playerId)) return;
+
+    const doorWall = nearestDoorWall();
+    if (doorWall) {
+      net.sendToggleDoor(doorWall.id);
+      return;
+    }
 
     if (nearStorage()) {
       invUi.openStorage();
@@ -779,6 +808,15 @@ function startGame(
         self.reviveProgress > 0
           ? `Reviving ${down.name}…`
           : `Hold E to revive ${down.name} (${COMBAT.reviveDuration}s)`;
+      return;
+    }
+
+    const doorWall = nearestDoorWall();
+    if (doorWall) {
+      promptEl.classList.add("visible");
+      promptEl.textContent = doorWall.doorOpen
+        ? "E — close door"
+        : "E — open door";
       return;
     }
 
@@ -839,6 +877,7 @@ function startGame(
     latestStorage = msg.storage;
     latestBase = msg.base;
     latestInvasion = msg.invasion;
+    rebuildSolidsFromBase(msg.base);
     playerCountEl.textContent = String(msg.players.length);
     zombieCountEl.textContent = String(msg.zombies.length);
     const self = msg.players.find((p) => p.id === active.playerId);
@@ -937,7 +976,7 @@ function startGame(
           ? "Click the game to capture mouse"
           : fp.isSprinting()
             ? "Sprinting · release Shift to walk"
-            : "1–6 · Shift sprint · E inv · R ready · Q/MMB ping · F repair · T upgrade · C craft · LMB use · ` console";
+            : "1–6 · Shift sprint · E door/inv · R ready · Q ping · F repair · T upgrade · C craft · LMB use · ` console";
 
     renderer.render(scene, camera);
     requestAnimationFrame(frame);

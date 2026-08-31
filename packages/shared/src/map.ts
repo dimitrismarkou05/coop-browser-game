@@ -44,7 +44,7 @@ export const PLACEHOLDER_BUILDINGS: readonly MapBuilding[] = [
     label: "Beacon",
     color: 0x7dffb3,
     box: boxFromCenter(0, 0, 0.5, 4.5, 0.5),
-    solid: true,
+    solid: false,
   },
   {
     id: "shop",
@@ -95,7 +95,8 @@ export function createZombiePenFences(): Aabb[] {
   const { minX, maxX, minZ, maxZ } = ZOMBIE_PEN;
   const t = 0.6;
   const h = 3.2;
-  const gateGap = 3.2; // players can walk in from the north
+  /** Wide enough for players (radius + inflate) to walk in from the north. */
+  const gateGap = 5.5;
   const mid = (minX + maxX) / 2;
   return [
     // South
@@ -161,13 +162,13 @@ export function isInsideZombiePen(x: number, z: number): boolean {
   );
 }
 
-/** Spawn on the safehouse pad. */
-export const SPAWN_POSITION = { x: 0, y: 0, z: 4 } as const;
+/** Spawn inside the safehouse (inside barricades). */
+export const SPAWN_POSITION = { x: 0, y: 0, z: 0 } as const;
 
-/** Per-slot offsets so players don't stack on join. */
+/** Per-slot offsets so players don't stack on join (stay inside walls ±4.6). */
 export const SPAWN_OFFSETS: readonly { x: number; z: number }[] = [
-  { x: 2.5, z: 3 },
-  { x: -2.5, z: 3 },
-  { x: 2.5, z: 5 },
-  { x: -2.5, z: 5 },
+  { x: 1.8, z: 1.5 },
+  { x: -1.8, z: 1.5 },
+  { x: 1.8, z: -1.5 },
+  { x: -1.8, z: -1.5 },
 ];

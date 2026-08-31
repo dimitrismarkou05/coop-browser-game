@@ -59,6 +59,8 @@ export type WallSnapshot = {
   maxHp: number;
   tier: number;
   broken: boolean;
+  /** Player-toggled door; zombies cannot open these. */
+  doorOpen: boolean;
 };
 
 export type BaseSnapshot = {
@@ -106,6 +108,7 @@ export type GameEvent =
   | { kind: "unlock"; unlock: string }
   | { kind: "craft"; playerId: string; item: string }
   | { kind: "wallBreak"; wallId: WallId }
+  | { kind: "doorToggle"; wallId: WallId; open: boolean; by: string }
   | { kind: "phaseChange"; phase: InvasionPhase; invasionIndex: number }
   | { kind: "waveStart"; waveIndex: number; invasionIndex: number }
   | { kind: "invasionWon"; invasionIndex: number; scrap: number; ammo: number }
@@ -151,6 +154,7 @@ export type ClientMessage =
     }
   | { type: "setReady"; ready: boolean }
   | { type: "repairWall"; wallId: WallId }
+  | { type: "toggleDoor"; wallId: WallId }
   | { type: "upgradeBase"; component: "wall" | "storage" | "workbench" | "generator"; wallId?: WallId }
   | { type: "craft"; recipe: "shotgun" }
   | { type: "worldPing"; x: number; y: number; z: number }
@@ -277,6 +281,11 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case "repairWall":
       if (typeof raw.wallId === "string" && WALL_IDS.has(raw.wallId)) {
         return { type: "repairWall", wallId: raw.wallId as WallId };
+      }
+      return null;
+    case "toggleDoor":
+      if (typeof raw.wallId === "string" && WALL_IDS.has(raw.wallId)) {
+        return { type: "toggleDoor", wallId: raw.wallId as WallId };
       }
       return null;
     case "upgradeBase": {
