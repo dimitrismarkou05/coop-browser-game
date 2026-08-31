@@ -5,9 +5,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,client -c green,cyan \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "npm run build -w @coop/shared && concurrently -n shared,server,client -c yellow,green,cyan \"npm run dev -w @coop/shared\" \"npm run dev -w @coop/server\" \"npm run dev -w @coop/client\"",
     "dev:client": "npm run dev -w @coop/client",
-    "dev:server": "npm run dev -w @coop/server",
+    "dev:server": "npm run build -w @coop/shared && npm run dev -w @coop/server",
     "build": "npm run build -w @coop/shared && npm run build -w @coop/server && npm run build -w @coop/client"
   },
   "devDependencies": {
